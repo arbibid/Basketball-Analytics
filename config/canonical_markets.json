@@ -1,0 +1,86 @@
+{
+  "OUTCOME_1": {
+    "FONBET": {"factor_id": [921, 1667]},
+    "BETCITY": {"market_id": [69, 203], "param": "1"}
+  },
+  "OUTCOME_X": {
+    "FONBET": {"factor_id": [922, 1668]},
+    "BETCITY": {"market_id": [69, 203], "param": "X"}
+  },
+  "OUTCOME_2": {
+    "FONBET": {"factor_id": [923, 1669]},
+    "BETCITY": {"market_id": [69, 203], "param": "2"}
+  },
+  "GAME_TOTAL_OVER": {
+    "FONBET": {"factor_id": [930, 1696, 1727, 7319, 8671, 8905]},
+    "BETCITY": {"market_id": [72, 112], "param": "Tb"}
+  },
+  "GAME_TOTAL_UNDER": {
+    "FONBET": {"factor_id": [931, 1697, 1728, 7320, 8672, 8906]},
+    "BETCITY": {"market_id": [72, 112], "param": "Tm"}
+  },
+  "HANDICAP_1": {
+    "FONBET": {"factor_id": [927, 1672, 1686, 4925, 8990]},
+    "BETCITY": {"market_id": [71], "param": "F1"}
+  },
+  "HANDICAP_2": {
+    "FONBET": {"factor_id": [928, 1675, 1687, 4926, 8992]},
+    "BETCITY": {"market_id": [71], "param": "F2"}
+  },
+  "TEAM_1_TOTAL_OVER": {
+    "FONBET": {"factor_id": [1081, 1089, 1809, 2008]},
+    "BETCITY": {"market_id": [3], "param": "Tb", "team": 1}
+  },
+  "TEAM_1_TOTAL_UNDER": {
+    "FONBET": {"factor_id": [1082, 1090, 1810, 2009]},
+    "BETCITY": {"market_id": [3], "param": "Tm", "team": 1}
+  },
+  "TEAM_2_TOTAL_OVER": {
+    "FONBET": {"factor_id": [1083, 1091, 1812, 2011]},
+    "BETCITY": {"market_id": [3], "param": "Tb", "team": 2}
+  },
+  "TEAM_2_TOTAL_UNDER": {
+    "FONBET": {"factor_id": [1084, 1092, 1813, 2012]},
+    "BETCITY": {"market_id": [3], "param": "Tm", "team": 2}
+  },
+  "PLAYER_PTS_OVER": {
+    "FONBET": {"factor_id": [1432, 921, 3201]},
+    "BETCITY": {"market_id": [971], "param": "Tb"}
+  },
+  "PLAYER_PTS_UNDER": {
+    "FONBET": {"factor_id": [1433, 922, 3202]},
+    "BETCITY": {"market_id": [971], "param": "Tm"}
+  },
+  "PLAYER_REB_OVER": {
+    "FONBET": {"factor_id": [1466, 1435, 924, 3204]},
+    "BETCITY": {"market_id": [431], "param": "Tb"}
+  },
+  "PLAYER_REB_UNDER": {
+    "FONBET": {"factor_id": [1467, 1436, 925, 3205]},
+    "BETCITY": {"market_id": [431], "param": "Tm"}
+  },
+  "PLAYER_AST_OVER": {
+    "FONBET": {"factor_id": [1474, 1438, 927]},
+    "BETCITY": {"market_id": [432], "param": "Tb"}
+  },
+  "PLAYER_AST_UNDER": {
+    "FONBET": {"factor_id": [1475, 1439, 928]},
+    "BETCITY": {"market_id": [432], "param": "Tm"}
+  },
+  "PLAYER_THREES_OVER": {
+    "FONBET": {"factor_id": [1515, 1447, 3216, 936]},
+    "BETCITY": {"market_id": [433], "param": "Tb"}
+  },
+  "PLAYER_THREES_UNDER": {
+    "FONBET": {"factor_id": [1516, 1448, 3217, 937]},
+    "BETCITY": {"market_id": [433], "param": "Tm"}
+  },
+  "PLAYER_H2H_1": {
+    "FONBET": {"factor_id": [3208]},
+    "BETCITY": {"market_id": [971], "param": "Tm", "is_h2h": true}
+  },
+  "PLAYER_H2H_2": {
+    "FONBET": {"factor_id": [3209]},
+    "BETCITY": {"market_id": [971], "param": "Tb", "is_h2h": true}
+  }
+}

@@ -1,0 +1,232 @@
+# Version: 1.2 (Security Fix: removed hardcoded credentials)
+import os
+import sys
+import urllib.parse
+from curl_cffi import requests
+import logging
+import json
+import time
+import uuid
+from playwright.sync_api import sync_playwright
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from config import Config
+
+logger = logging.getLogger("BetcityAPI")
+
+
+class BetcityAPI:
+    def __init__(self):
+        self.session = requests.Session(impersonate="chrome120")
+        self.token = None
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Origin": "https://betcity.ru",
+            "X-Requested-With": "XMLHttpRequest",
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        self.session.headers.update(self.headers)
+
+    def login(self) -> bool:
+        """Авторизация через Playwright и захват токена/кук"""
+        logger.info("🌐 [BetcityAPI] Открываем браузер для авто-логина...")
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True, args=['--headless=new'])
+                context = browser.new_context(
+                    viewport={"width": 1280, "height": 720},
+                    user_agent=self.headers["User-Agent"]
+                )
+                page = context.new_page()
+                page.goto("https://betcity.ru/ru/")
+                logger.info("⏳ [BetcityAPI] Загружаем главную страницу...")
+                page.wait_for_load_state("networkidle")
+
+                try:
+                    logger.info("🔑 [BetcityAPI] Выполняем вход...")
+                    page.click('text="Вход"')
+                    page.wait_for_timeout(2000)
+                    page.locator('input[type="text"], input[type="tel"]').first.fill(Config.BETTING_PHONE)
+                    page.locator('input[type="password"]').first.fill(Config.BETTING_PASSWORD)
+                    page.wait_for_timeout(1000)
+                    page.click('button:has-text("Войти"), button:has-text("Вход")')
+                    page.wait_for_timeout(10000)
+                except Exception as e:
+                    logger.warning(f"⚠️ [BetcityAPI] Авто-логин споткнулся: {e}. Ждем ручного ввода (30 сек)...")
+                    page.wait_for_timeout(30000)
+
+                playwright_cookies = context.cookies()
+                browser.close()
+
+                cookies_dict = {}
+                for cookie in playwright_cookies:
+                    cookies_dict[cookie['name']] = cookie['value']
+                    if cookie['name'] == "tk":
+                        self.token = urllib.parse.unquote(cookie['value'])
+
+                if self.token:
+                    self.session.cookies.update(cookies_dict)
+                    logger.info("✅ [BetcityAPI] Токен успешно захвачен.")
+                    return True
+                else:
+                    logger.error("❌ [BetcityAPI] Токен не найден!")
+                    return False
+        except Exception as e:
+            logger.error(f"❌ [BetcityAPI] Ошибка Playwright: {e}")
+            return False
+
+    def _find_target(self, event_data: dict, bet_type: str, target_line: float):
+        """Парсит JSON линии и ищет нужный исход"""
+        try:
+            chmps = event_data.get('reply', {}).get('sports', {}).get('3', {}).get('chmps', {})
+            for chmp_id, chmp_data in chmps.items():
+                evts = chmp_data.get('evts', {})
+                for ev_id, ev_data in evts.items():
+                    for section in ['main', 'ext']:
+                        if section not in ev_data: continue
+                        for market_id, market_data in ev_data[section].items():
+                            inner_data = market_data.get('data', {})
+                            for inner_ev_id, ev_blocks in inner_data.items():
+                                blocks = ev_blocks.get('blocks', {})
+                                for b_name, b_data in blocks.items():
+
+                                    # Логика поиска (можно расширять под ТМ, ИТМ и т.д.)
+                                    if bet_type == "Ф2" and 'F2' in b_data and 'Kf_F2' in b_data:
+                                        if float(b_data['F2']) == float(target_line):
+                                            return ev_id, b_data['Kf_F2']['ps'], b_data['Kf_F2']['kf'], b_data['F2']
+
+                                    # ТУТ ДОБАВИТЬ ЛОГИКУ ДЛЯ ДРУГИХ ТИПОВ (ТМ, ИТМ и т.д.)
+
+        except Exception as e:
+            logger.error(f"❌ [BetcityAPI] Ошибка парсинга линии: {e}")
+        return None, None, None, None
+
+    def _extract_bets_list(self, bets_obj):
+        """Внутренний метод для поиска номера купона в истории"""
+        bet_list = []
+        if isinstance(bets_obj, dict):
+            for k, v in bets_obj.items():
+                if isinstance(v, dict):
+                    v['_raw_key'] = k
+                    bet_list.append(v)
+        elif isinstance(bets_obj, list):
+            bet_list = [b for b in bets_obj if isinstance(b, dict)]
+
+        parsed_bets = []
+        for idx, b in enumerate(bet_list):
+            bet_id = 0
+            for key in ["bnum", "id_num", "id_purch", "id_bet", "id_head", "id_bt", "id"]:
+                val = b.get(key)
+                if val is not None and str(val).isdigit():
+                    candidate = int(val)
+                    if candidate > 100:
+                        bet_id = candidate
+                        break
+                    elif bet_id == 0 and candidate > 0:
+                        bet_id = candidate
+
+            if bet_id == 0:
+                raw_k = b.get('_raw_key')
+                if raw_k and str(raw_k).isdigit():
+                    bet_id = int(raw_k)
+                else:
+                    bet_id = 999000 + idx
+            parsed_bets.append((bet_id, b))
+        return sorted(parsed_bets, key=lambda x: x[0], reverse=True)
+
+    def place_bet(self, event_id: str, bet_type: str, line: float, amount: float) -> dict:
+        """Главный метод: оформляет ставку и возвращает результат"""
+        result = {'success': False, 'ticket_id': None, 'actual_kf': None}
+
+        if not self.token:
+            if not self.login():
+                return result
+
+        self.session.headers.update({"Referer": f"https://betcity.ru/ru/line/basketball/1498/{event_id}"})
+
+        try:
+            # 1. Загрузка линии
+            ext_url = "https://ad.betcity.ru/d/off/events?rev=6&ext=1&add=dep_events&ver=87&csn=ooca9s"
+            resp_ext = self.session.post(ext_url, data=f"ids_ev={event_id}", timeout=10).json()
+
+            target_ev_id, pos, kf, actual_line = self._find_target(resp_ext, bet_type, line)
+
+            if not pos:
+                logger.error(f"❌ [BetcityAPI] Исход {bet_type} {line} не найден!")
+                return result
+
+            logger.info(f"🎯 [BetcityAPI] Цель: POS {pos}, Кэф {kf}. Очищаем корзину...")
+
+            # 2. Очистка и добавление в корзину
+            self.session.post(f"https://hdr.betcity.ru/d/basket/del_all?token={self.token}&ver=87", timeout=10)
+
+            add_url = "https://hdr.betcity.ru/d/basket/add"
+            params_add = {
+                "sys": 1, "id": target_ev_id, "pos": pos, "k": kf, "ts": 0, "lv": actual_line,
+                "token": self.token, "tum": f"{int(time.time() * 1000)}_1", "ver": 87, "csn": "1"
+            }
+            data_add = {"cart": "{}", "settings": '{"remember_bet":true,"clear_cart":true,"cart_kf_type":"0"}'}
+            resp_add = self.session.post(add_url, params=params_add, data=data_add, timeout=10).json()
+
+            bsks = resp_add.get("reply", {}).get("bsks", [])
+            if not bsks:
+                logger.error("❌ [BetcityAPI] Ошибка добавления в корзину.")
+                return result
+
+            # 3. Оформление Checkout
+            logger.info(f"🚀 [BetcityAPI] Отправляем ордер на {amount} RUB...")
+            bet_key = f"{target_ev_id}_{pos}"
+            payload = {
+                bet_key: {"id_ev": int(target_ev_id), "ps": int(pos), "kf": float(kf), "is_live": 0, "t": bsks[0]["t"],
+                          "s": bsks[0]["s"], "fora": str(actual_line)}}
+
+            checkout_url = "https://hdr.betcity.ru/d/basket/checkout"
+            params_chk = {"type": 0, "ts": resp_add["reply"]["ts"], "token": self.token,
+                          "tum": f"{int(time.time() * 1000)}_2", "ver": 87, "csn": "1"}
+            data_chk = {
+                "data": json.dumps(payload),
+                "settings": '{"clear_cart":false}',
+                "context": f'{{"api_method":"checkout","max_bet":{amount},"shown_balance":{amount}}}',
+                "uuid": str(uuid.uuid4()),
+                f"bets[{bet_key}]": str(amount)
+            }
+
+            resp_chk = self.session.post(checkout_url, params=params_chk, data=data_chk, timeout=10).json()
+            reply_chk = resp_chk.get("reply", {})
+
+            # 4. Проверка результата
+            if "id_bet" in reply_chk:
+                result.update({'success': True, 'ticket_id': str(reply_chk['id_bet']), 'actual_kf': float(kf)})
+                logger.info(f"🔥 [BetcityAPI] УСПЕХ! Купон: {result['ticket_id']}")
+                return result
+
+            elif reply_chk.get("status") == 0:
+                interval = reply_chk.get("interval_list", 7)
+                logger.info(f"⏳ [BetcityAPI] Холд сервера {interval} сек...")
+                time.sleep(interval + 1)
+
+                # Ищем купон в истории
+                hist_url = f"https://hdr.betcity.ru/d/user/current?per_page=10&page=1&rev=1&token={self.token}&ver=87&csn=1"
+                resp_hist = self.session.get(hist_url, timeout=10).json()
+
+                if resp_hist.get("ok"):
+                    sorted_bets = self._extract_bets_list(resp_hist.get("reply", {}).get("bets", {}))
+                    if sorted_bets:
+                        result.update({'success': True, 'ticket_id': str(sorted_bets[0][0]), 'actual_kf': float(kf)})
+                        logger.info(f"🔥 [BetcityAPI] УСПЕХ (Из истории)! Купон: {result['ticket_id']}")
+                        return result
+
+            logger.error(f"❌ [BetcityAPI] Сервер отклонил ставку: {resp_chk}")
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ [BetcityAPI] Сетевая ошибка: {e}")
+            return result
+
+
+# Пример вызова:
+if __name__ == "__main__":
+    api = BetcityAPI()
+    # Успешно авторизуется и пробьет ставку (укажи актуальный event_id)
+    # response = api.place_bet(event_id="23918572", bet_type="Ф2", line=11.5, amount=10)
+    # print(response)

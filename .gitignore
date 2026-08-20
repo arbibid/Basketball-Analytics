@@ -1,0 +1,11 @@
+.idea/
+*.db-shm
+*.db-wal
+data/missing_players.txt
+.venv/
+__pycache__/
+*.pyc
+.env
+*.db
+data/raw_boxscores/
+data/gamebooks/

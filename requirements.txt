@@ -1,0 +1,13 @@
+aiogram==3.30.0
+aiohttp==3.14.1
+aiohttp_socks==0.11.0
+aiosqlite==0.22.1
+beautifulsoup4==4.15.0
+pandas==3.0.3
+playwright==1.60.0
+playwright-stealth==2.0.3
+PyPDF2==3.0.1
+python-dotenv==1.2.2
+requests==2.34.2
+yookassa==3.11.0
+google-genai
