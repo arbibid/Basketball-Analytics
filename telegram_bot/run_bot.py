@@ -574,72 +574,75 @@ async def process_place_bet(callback: CallbackQuery):
 
 
 def get_real_current_kf(cursor, match_name, market, player_name, line, default_kf, match_id=None):
-    market_type = "GAME_TOTAL" if market == "GAME_TOTAL" else "TEAM_TOTAL" if market == "TEAM_TOTAL" else "HANDICAP" if market == "HANDICAP" else "PLAYER_PROP"
-    p_or_t = "GAME" if player_name == "GAME" else player_name
-
-    if match_id is not None:
-        cursor.execute("""
-            SELECT over_kf, under_kf
-            FROM odds_history
-            WHERE market_type = ? AND player_or_team = ? AND line = ? AND (event_id = ? OR parent_event_id = ?)
-            ORDER BY timestamp DESC LIMIT 1
-        """, (market_type, p_or_t, line, match_id, match_id))
-    else:
-        cursor.execute("""
-            SELECT over_kf, under_kf
-            FROM odds_history
-            WHERE market_type = ? AND player_or_team = ? AND line = ?
-            ORDER BY timestamp DESC LIMIT 1
-        """, (market_type, p_or_t, line))
-
-    row = cursor.fetchone()
-    if row:
-        o, u = row
-        if abs(o - float(default_kf)) < abs(u - float(default_kf)):
-            return o
-        return u
-    return default_kf
-
+    kfs = get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_kf, 'FONBET', match_id)
+    return kfs.get('FONBET', default_kf)
 
 def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_kf, default_bookmaker, match_id=None):
-    market_type = "GAME_TOTAL" if market == "GAME_TOTAL" else "TEAM_TOTAL" if market == "TEAM_TOTAL" else "HANDICAP" if market == "HANDICAP" else "PLAYER_PROP"
-    p_or_t = "GAME" if player_name == "GAME" else player_name
+    kfs = {default_bookmaker: default_kf}
 
-    if match_id is not None:
-        cursor.execute("""
+    # ИСПРАВЛЕНИЕ: Мы не перезаписываем market! Используем реальный (PLAYER_PTS, PLAYER_REB и т.д.)
+    is_player_prop = market.startswith("PLAYER_") and market != "PLAYER_H2H"
+
+    # --- 1. ПЛЕЕРСКИЕ ПРОПЫ (Ищем по всем БК по имени игрока, без привязки к ID матча) ---
+    if is_player_prop:
+        from config import Config
+        mappings = Config.get_mappings()
+        player_map = mappings.get("PLAYER_MAP", {})
+
+        # Находим все возможные русские имена этого игрока (и для Фонбета, и для Бетсити)
+        aliases = [ru_name for ru_name, en_name in player_map.items() if en_name == player_name]
+        if not aliases:
+            aliases = [player_name]
+
+        placeholders = ', '.join(['?'] * len(aliases))
+
+        query = f"""
             SELECT bookmaker, over_kf, under_kf
             FROM (
                 SELECT bookmaker, over_kf, under_kf,
                        ROW_NUMBER() OVER(PARTITION BY bookmaker ORDER BY timestamp DESC) as rn
                 FROM odds_history
-                WHERE market_type = ? AND player_or_team = ? AND line = ? AND (event_id = ? OR parent_event_id = ?)
+                WHERE market_type = ? 
+                  AND player_or_team IN ({placeholders}) 
+                  AND line = ?
+                  AND timestamp >= datetime('now', '-24 hours')
             )
             WHERE rn = 1
-        """, (market_type, p_or_t, line, match_id, match_id))
+        """
+        params = [market] + aliases + [line]
+        cursor.execute(query, params)
+
+        for row in cursor.fetchall():
+            bk, o, u = row
+            if abs(o - float(default_kf)) < abs(u - float(default_kf)):
+                kfs[bk] = o
+            else:
+                kfs[bk] = u
+
+    # --- 2. ИСХОДЫ И ТОТАЛЫ (Строго по ID матча, чтобы не спутать форы разных игр) ---
     else:
-        cursor.execute("""
-            SELECT bookmaker, over_kf, under_kf
-            FROM (
-                SELECT bookmaker, over_kf, under_kf,
-                       ROW_NUMBER() OVER(PARTITION BY bookmaker ORDER BY timestamp DESC) as rn
+        p_or_t = "GAME" if player_name == "GAME" else player_name
+        if match_id is not None:
+            query = """
+                SELECT bookmaker, over_kf, under_kf
+                FROM (
+                    SELECT bookmaker, over_kf, under_kf,
+                           ROW_NUMBER() OVER(PARTITION BY bookmaker ORDER BY timestamp DESC) as rn
                 FROM odds_history
-                WHERE market_type = ? AND player_or_team = ? AND line = ?
-            )
-            WHERE rn = 1
-        """, (market_type, p_or_t, line))
+                WHERE market_type = ? AND player_or_team = ? AND line = ? 
+                  AND (event_id = ? OR parent_event_id = ?)
+                )
+                WHERE rn = 1
+            """
+            cursor.execute(query, (market, p_or_t, line, str(match_id), str(match_id)))
 
-    rows = cursor.fetchall()
-    kfs = {}
-    for row in rows:
-        bk, o, u = row
-        if abs(o - float(default_kf)) < abs(u - float(default_kf)):
-            kfs[bk] = o
-        else:
-            kfs[bk] = u
-            
-    if default_bookmaker not in kfs:
-        kfs[default_bookmaker] = default_kf
-        
+            for row in cursor.fetchall():
+                bk, o, u = row
+                if abs(o - float(default_kf)) < abs(u - float(default_kf)):
+                    kfs[bk] = o
+                else:
+                    kfs[bk] = u
+
     return kfs
 
 
