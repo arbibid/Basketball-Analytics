@@ -1,4 +1,4 @@
-# Version: 6.6
+# Version: 6.7
 import sqlite3
 import os
 import datetime
@@ -52,7 +52,7 @@ class DBManager:
             id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             event_id TEXT, market_type TEXT, player_or_team TEXT, line REAL,
             over_kf REAL, under_kf REAL, factor_id INTEGER, bookmaker TEXT DEFAULT 'FONBET',
-            parent_event_id TEXT
+            parent_event_id TEXT, wnba_id INTEGER
         )''')
 
         cursor.execute('''CREATE TABLE IF NOT EXISTS users (
@@ -85,7 +85,8 @@ class DBManager:
             player_name TEXT, line REAL, prediction REAL, selection TEXT, kf REAL,
             bet_amount REAL, status TEXT DEFAULT 'PENDING', category TEXT, vip_kf TEXT,
             published_at TEXT, is_preliminary TEXT DEFAULT '0', coupon_id TEXT,
-            actual_result REAL, profit REAL, bookmaker TEXT DEFAULT 'FONBET', market_type TEXT
+            actual_result REAL, profit REAL, bookmaker TEXT DEFAULT 'FONBET', market_type TEXT,
+            wnba_id INTEGER
         )''')
 
         cursor.execute('''CREATE TABLE IF NOT EXISTS actual_lineups (
@@ -110,7 +111,8 @@ class DBManager:
                 edge REAL,
                 status TEXT DEFAULT 'READY', -- READY, PROCESSED, REJECTED
                 bookmaker TEXT DEFAULT 'FONBET',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                wnba_id INTEGER
             )
         ''')
         
@@ -146,16 +148,28 @@ class DBManager:
     # 🔥 НОВЫЕ МЕТОДЫ ДЛЯ РОУТЕРА (Интеграция логики Джулис)
     # ====================================================================
 
-    def add_bet_signal(self, match_name, market_type, target, line, expected_kf, edge, bookmaker='FONBET'):
+    def add_bet_signal(self, match_name, market_type, target, line, expected_kf, edge, bookmaker='FONBET', wnba_id=None):
         conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute('''
-                INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge, bookmaker)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (match_name, market_type, target, line, expected_kf, edge, bookmaker))
+                INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge, bookmaker, wnba_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (match_name, market_type, target, line, expected_kf, edge, bookmaker, wnba_id))
             conn.commit()
             return c.lastrowid
+        finally:
+            conn.close()
+
+    def save_odds(self, event_id, factor_id, market_type, player_or_team, line, over_kf, under_kf, parent_event_id, wnba_id=None, bookmaker='FONBET'):
+        conn = self.get_connection()
+        try:
+            c = conn.cursor()
+            c.execute('''
+                INSERT INTO odds_history (event_id, factor_id, market_type, player_or_team, line, over_kf, under_kf, parent_event_id, wnba_id, bookmaker)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (event_id, factor_id, market_type, player_or_team, line, over_kf, under_kf, parent_event_id, wnba_id, bookmaker))
+            conn.commit()
         finally:
             conn.close()
 
