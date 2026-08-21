@@ -1,4 +1,4 @@
-# Version: 6.9
+# Version: 6.10
 import asyncio
 import os
 import sys
@@ -389,7 +389,7 @@ def _fetch_top_values_db(match_id, user_id, limit=5):
         if tier == 'standard' and (bookmaker != 'FONBET' or category == 'ИГРОК'):
             continue
 
-        all_kfs = get_all_kfs_for_bet(c, match_name, market, p_name, line, kf, bookmaker)
+        all_kfs = get_all_kfs_for_bet(c, match_name, market, p_name, line, kf, bookmaker, match_id=match_id)
         real_kf = all_kfs.get(bookmaker, kf)
 
         try:
@@ -573,16 +573,24 @@ async def process_place_bet(callback: CallbackQuery):
     await callback.answer("✅ Сигнал успешно отправлен в Роутер!", show_alert=False)
 
 
-def get_real_current_kf(cursor, match_name, market, player_name, line, default_kf):
+def get_real_current_kf(cursor, match_name, market, player_name, line, default_kf, match_id=None):
     market_type = "GAME_TOTAL" if market == "GAME_TOTAL" else "TEAM_TOTAL" if market == "TEAM_TOTAL" else "HANDICAP" if market == "HANDICAP" else "PLAYER_PROP"
     p_or_t = "GAME" if player_name == "GAME" else player_name
 
-    cursor.execute("""
-        SELECT over_kf, under_kf
-        FROM odds_history
-        WHERE market_type = ? AND player_or_team = ? AND line = ?
-        ORDER BY timestamp DESC LIMIT 1
-    """, (market_type, p_or_t, line))
+    if match_id is not None:
+        cursor.execute("""
+            SELECT over_kf, under_kf
+            FROM odds_history
+            WHERE market_type = ? AND player_or_team = ? AND line = ? AND (event_id = ? OR parent_event_id = ?)
+            ORDER BY timestamp DESC LIMIT 1
+        """, (market_type, p_or_t, line, match_id, match_id))
+    else:
+        cursor.execute("""
+            SELECT over_kf, under_kf
+            FROM odds_history
+            WHERE market_type = ? AND player_or_team = ? AND line = ?
+            ORDER BY timestamp DESC LIMIT 1
+        """, (market_type, p_or_t, line))
 
     row = cursor.fetchone()
     if row:
@@ -593,20 +601,32 @@ def get_real_current_kf(cursor, match_name, market, player_name, line, default_k
     return default_kf
 
 
-def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_kf, default_bookmaker):
+def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_kf, default_bookmaker, match_id=None):
     market_type = "GAME_TOTAL" if market == "GAME_TOTAL" else "TEAM_TOTAL" if market == "TEAM_TOTAL" else "HANDICAP" if market == "HANDICAP" else "PLAYER_PROP"
     p_or_t = "GAME" if player_name == "GAME" else player_name
 
-    cursor.execute("""
-        SELECT bookmaker, over_kf, under_kf
-        FROM (
-            SELECT bookmaker, over_kf, under_kf,
-                   ROW_NUMBER() OVER(PARTITION BY bookmaker ORDER BY timestamp DESC) as rn
-            FROM odds_history
-            WHERE market_type = ? AND player_or_team = ? AND line = ?
-        )
-        WHERE rn = 1
-    """, (market_type, p_or_t, line))
+    if match_id is not None:
+        cursor.execute("""
+            SELECT bookmaker, over_kf, under_kf
+            FROM (
+                SELECT bookmaker, over_kf, under_kf,
+                       ROW_NUMBER() OVER(PARTITION BY bookmaker ORDER BY timestamp DESC) as rn
+                FROM odds_history
+                WHERE market_type = ? AND player_or_team = ? AND line = ? AND (event_id = ? OR parent_event_id = ?)
+            )
+            WHERE rn = 1
+        """, (market_type, p_or_t, line, match_id, match_id))
+    else:
+        cursor.execute("""
+            SELECT bookmaker, over_kf, under_kf
+            FROM (
+                SELECT bookmaker, over_kf, under_kf,
+                       ROW_NUMBER() OVER(PARTITION BY bookmaker ORDER BY timestamp DESC) as rn
+                FROM odds_history
+                WHERE market_type = ? AND player_or_team = ? AND line = ?
+            )
+            WHERE rn = 1
+        """, (market_type, p_or_t, line))
 
     rows = cursor.fetchall()
     kfs = {}
@@ -795,16 +815,19 @@ def _fetch_category_predictions_db(user_id, match_id, category):
         hidden = False
         minutes_left = 0
         real_kf = kf
+        all_kfs = {}
         if not is_vip and time_passed < 30 and status != 'PRELIM_READY':
             hidden = True
             minutes_left = int(30 - time_passed)
         else:
-            real_kf = get_real_current_kf(c, match_name, market, p_name, line, kf)
+            all_kfs = get_all_kfs_for_bet(c, match_name, market, p_name, line, kf, bookmaker, match_id=match_id)
+            real_kf = all_kfs.get(bookmaker, kf)
 
         processed_bets.append({
             'market': market, 'p_name': p_name, 'line': line, 'proj': proj,
             'sel': sel, 'kf': kf, 'vip_kf': vip_kf, 'real_kf': real_kf,
-            'hidden': hidden, 'minutes_left': minutes_left, 'bookmaker': bookmaker
+            'hidden': hidden, 'minutes_left': minutes_left, 'bookmaker': bookmaker,
+            'all_kfs': all_kfs
         })
 
     conn.close()
@@ -930,13 +953,25 @@ async def show_category_prediction(callback: CallbackQuery):
                 text += f"   Выбор: <b>Скрыто</b> | Линия: {b['line']}\n"
                 text += f"   <i>Доступно через {b['minutes_left']} мин. (Или купите VIP)</i>\n\n"
         else:
-            kf_display = f"<s>{b['vip_kf']}</s> ➡️ <b>{b['real_kf']}</b>" if b['vip_kf'] and float(
-                b['real_kf']) != float(b['vip_kf']) else f"<b>{b['kf']}</b>"
             fonbet_url = f"https://fon.bet/sports/basketball/country/unitedstates/125064/{match_id}"
 
-            book_icon = "🔴 Fonbet"
-            if b.get('bookmaker') == 'BETCITY':
-                book_icon = "🏙 Betcity"
+            all_kfs = b.get('all_kfs', {})
+            kfs_strs = []
+
+            for bk, kf_val in all_kfs.items():
+                bk_icon = "🔴 Fon" if bk == 'FONBET' else "🏙 Bet" if bk == 'BETCITY' else bk
+                if bk == b.get('bookmaker') and b['vip_kf'] and float(kf_val) != float(b['vip_kf']):
+                    kfs_strs.append(f"{bk_icon}: <s>{b['vip_kf']}</s> ➡️ <b>{kf_val}</b>")
+                else:
+                    kfs_strs.append(f"{bk_icon}: <b>{kf_val}</b>")
+
+            if not kfs_strs:
+                bk_icon = "🔴 Fon" if b.get('bookmaker') == 'FONBET' else "🏙 Bet" if b.get('bookmaker') == 'BETCITY' else b.get('bookmaker', '🔴 Fon')
+                kf_display = f"<s>{b['vip_kf']}</s> ➡️ <b>{b['real_kf']}</b>" if b['vip_kf'] and float(
+                    b['real_kf']) != float(b['vip_kf']) else f"<b>{b['kf']}</b>"
+                kfs_strs.append(f"{bk_icon}: {kf_display}")
+
+            kfs_str = " | ".join(kfs_strs)
 
             if category == "ИГРОК":
                 if b['p_name'] != current_player:
@@ -956,12 +991,12 @@ async def show_category_prediction(callback: CallbackQuery):
                 text += f"├ {market_ru}\n"
                 text += f"├ Выбор: <b>{b['sel']}</b> {b['line']}\n"
                 text += f"├ Проекция: {b['proj']:.1f}\n"
-                text += f"└ {book_icon} | Кэф: <a href='{fonbet_url}'>🚀 {kf_display}</a>\n\n"
+                text += f"└ <a href='{fonbet_url}'>🚀 Кэфы: {kfs_str}</a>\n\n"
             else:
                 target = f"Рынок: <b>{b['p_name']}</b>"
                 text += f"🔹 {target}\n"
                 text += f"   Прогноз: {b['proj']:.1f} | Линия бука: {b['line']}\n"
-                text += f"   Выбор: <b>{b['sel']}</b> | {book_icon} <a href='{fonbet_url}'>🚀 Кэф: {kf_display}</a>\n\n"
+                text += f"   Выбор: <b>{b['sel']}</b> | <a href='{fonbet_url}'>🚀 Кэфы: {kfs_str}</a>\n\n"
 
     nav_buttons = []
     if page > 0:
@@ -1401,12 +1436,35 @@ async def handle_subs_filter(callback: CallbackQuery):
         title = "✅ Активные подписчики" if filter_type == "active" else "❌ Неактивные подписчики"
         response = f"{title}:\n\n" + "\n".join(filtered_users)
 
-    if len(response) > 4000:
-        for i in range(0, len(response), 4000):
-            await callback.message.answer(response[i:i + 4000])
-    else:
-        await callback.message.edit_text(response)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="subs_back")]
+    ])
 
+    if len(response) > 4000:
+        chunks = [response[i:i + 4000] for i in range(0, len(response), 4000)]
+        for i, chunk in enumerate(chunks):
+            if i == len(chunks) - 1:
+                await callback.message.answer(chunk, reply_markup=keyboard)
+            else:
+                await callback.message.answer(chunk)
+    else:
+        await callback.message.edit_text(response, reply_markup=keyboard)
+
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "subs_back")
+async def handle_subs_back(callback: CallbackQuery):
+    if callback.from_user.id != Config.ADMIN_ID:
+        await callback.answer()
+        return
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Активные", callback_data="subs_active")],
+        [InlineKeyboardButton(text="❌ Неактивные (Истекли)", callback_data="subs_inactive")]
+    ])
+
+    await callback.message.edit_text("Выберите список подписчиков:", reply_markup=keyboard)
     await callback.answer()
 
 
