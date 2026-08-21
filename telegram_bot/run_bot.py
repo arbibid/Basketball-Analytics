@@ -1,4 +1,4 @@
-# Version: 6.10
+# Version: 6.11
 import asyncio
 import os
 import sys
@@ -329,6 +329,7 @@ async def show_match_categories(callback: CallbackQuery):
         [InlineKeyboardButton(text="Исход (Победа/Фора)", callback_data=f"cat_ИСХОД_{match_id}")],
         [InlineKeyboardButton(text="Тоталы (Матч/Команды)", callback_data=f"cat_ТОТАЛ_{match_id}")],
         [InlineKeyboardButton(text="Показатели игроков", callback_data=f"cat_ИГРОК_{match_id}")],
+        [InlineKeyboardButton(text="⚔️ Дуэли", callback_data=f"cat_ДУЭЛИ_{match_id}")],
         [InlineKeyboardButton(text="📊 Детали расчета (Математика)", callback_data=f"mathlog_{match_id}")],
         [InlineKeyboardButton(text="🔙 Назад к расписанию", callback_data="show_predictions")]
     ])
@@ -619,7 +620,48 @@ def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_k
             else:
                 kfs[bk] = u
 
-    # --- 2. ИСХОДЫ И ТОТАЛЫ (Строго по ID матча, чтобы не спутать форы разных игр) ---
+    # --- 2. ДУЭЛИ ИГРОКОВ (H2H) ---
+    elif market == "PLAYER_H2H":
+        from config import Config
+        mappings = Config.get_mappings()
+        player_map = mappings.get("PLAYER_MAP", {})
+
+        parts = player_name.split(' vs ')
+        if len(parts) != 2:
+            parts = player_name.split(' - ')
+
+        if len(parts) == 2:
+            p1_en, p2_en = parts[0].strip(), parts[1].strip()
+            p1_aliases = [ru_name for ru_name, en_name in player_map.items() if en_name == p1_en]
+            if not p1_aliases: p1_aliases = [p1_en]
+            p2_aliases = [ru_name for ru_name, en_name in player_map.items() if en_name == p2_en]
+            if not p2_aliases: p2_aliases = [p2_en]
+
+            query = "SELECT bookmaker, over_kf, under_kf, player_or_team FROM odds_history WHERE market_type = 'PLAYER_H2H' AND timestamp >= datetime('now', '-24 hours') ORDER BY timestamp DESC"
+            cursor.execute(query)
+
+            # Dictionary to store the most recent odds per bookmaker
+            found_kfs = {}
+            for row in cursor.fetchall():
+                bk, o, u, p_or_t = row
+                p_or_t_lower = p_or_t.lower()
+
+                p1_match = any(alias.lower() in p_or_t_lower for alias in p1_aliases)
+                p2_match = any(alias.lower() in p_or_t_lower for alias in p2_aliases)
+
+                if p1_match and p2_match:
+                    if bk not in found_kfs:
+                        found_kfs[bk] = []
+                    found_kfs[bk].append((o, u))
+
+            for bk, kfs_list in found_kfs.items():
+                o, u = kfs_list[0]
+                if abs(o - float(default_kf)) < abs(u - float(default_kf)):
+                    kfs[bk] = o
+                else:
+                    kfs[bk] = u
+
+    # --- 3. ИСХОДЫ И ТОТАЛЫ (Строго по ID матча, чтобы не спутать форы разных игр) ---
     else:
         p_or_t = "GAME" if player_name == "GAME" else player_name
         if match_id is not None:
@@ -780,22 +822,56 @@ def _fetch_category_predictions_db(user_id, match_id, category):
     is_preliminary_filter = 1 if status in ('WAITING_REFS', 'WAITING_ROSTERS') else 0
 
     try:
-        c.execute(
-            "SELECT market, player_name, line, prediction, selection, kf, vip_kf, published_at, bookmaker "
-            "FROM virtual_bets "
-            "WHERE match_name = ? AND category = ? AND is_preliminary = ? "
-            "ORDER BY kf DESC",
-            (match_name, category, is_preliminary_filter)
-        )
+        if category == 'ДУЭЛИ':
+            c.execute(
+                "SELECT market, player_name, line, prediction, selection, kf, vip_kf, published_at, bookmaker "
+                "FROM virtual_bets "
+                "WHERE match_name = ? AND market = 'PLAYER_H2H' AND is_preliminary = ? "
+                "ORDER BY kf DESC",
+                (match_name, is_preliminary_filter)
+            )
+        elif category == 'ИГРОК':
+            c.execute(
+                "SELECT market, player_name, line, prediction, selection, kf, vip_kf, published_at, bookmaker "
+                "FROM virtual_bets "
+                "WHERE match_name = ? AND category = ? AND market != 'PLAYER_H2H' AND is_preliminary = ? "
+                "ORDER BY kf DESC",
+                (match_name, category, is_preliminary_filter)
+            )
+        else:
+            c.execute(
+                "SELECT market, player_name, line, prediction, selection, kf, vip_kf, published_at, bookmaker "
+                "FROM virtual_bets "
+                "WHERE match_name = ? AND category = ? AND is_preliminary = ? "
+                "ORDER BY kf DESC",
+                (match_name, category, is_preliminary_filter)
+            )
         bets = c.fetchall()
     except sqlite3.OperationalError:
-        c.execute(
-            "SELECT market, player_name, line, prediction, selection, kf, vip_kf, published_at "
-            "FROM virtual_bets "
-            "WHERE match_name = ? AND category = ? AND is_preliminary = ? "
-            "ORDER BY kf DESC",
-            (match_name, category, is_preliminary_filter)
-        )
+        if category == 'ДУЭЛИ':
+            c.execute(
+                "SELECT market, player_name, line, prediction, selection, kf, vip_kf, published_at "
+                "FROM virtual_bets "
+                "WHERE match_name = ? AND market = 'PLAYER_H2H' AND is_preliminary = ? "
+                "ORDER BY kf DESC",
+                (match_name, is_preliminary_filter)
+            )
+        elif category == 'ИГРОК':
+            c.execute(
+                "SELECT market, player_name, line, prediction, selection, kf, vip_kf, published_at "
+                "FROM virtual_bets "
+                "WHERE match_name = ? AND category = ? AND market != 'PLAYER_H2H' AND is_preliminary = ? "
+                "ORDER BY kf DESC",
+                (match_name, category, is_preliminary_filter)
+            )
+        else:
+            c.execute(
+                "SELECT market, player_name, line, prediction, selection, kf, vip_kf, published_at "
+                "FROM virtual_bets "
+                "WHERE match_name = ? AND category = ? AND is_preliminary = ? "
+                "ORDER BY kf DESC",
+                (match_name, category, is_preliminary_filter)
+            )
         raw_bets = c.fetchall()
         bets = [(*b, 'FONBET') for b in raw_bets]
 
@@ -819,12 +895,22 @@ def _fetch_category_predictions_db(user_id, match_id, category):
         minutes_left = 0
         real_kf = kf
         all_kfs = {}
+
+        # Always fetch odds to ensure we can filter by bookmaker for DUELS even if hidden
+        all_kfs = get_all_kfs_for_bet(c, match_name, market, p_name, line, kf, bookmaker, match_id=match_id)
+        if category == 'ДУЭЛИ':
+            if 'BETCITY' not in all_kfs:
+                continue
+            real_kf = all_kfs['BETCITY']
+            kf = real_kf
+            bookmaker = 'BETCITY'
+            all_kfs = {'BETCITY': real_kf}
+        else:
+            real_kf = all_kfs.get(bookmaker, kf)
+
         if not is_vip and time_passed < 30 and status != 'PRELIM_READY':
             hidden = True
             minutes_left = int(30 - time_passed)
-        else:
-            all_kfs = get_all_kfs_for_bet(c, match_name, market, p_name, line, kf, bookmaker, match_id=match_id)
-            real_kf = all_kfs.get(bookmaker, kf)
 
         processed_bets.append({
             'market': market, 'p_name': p_name, 'line': line, 'proj': proj,
@@ -914,7 +1000,7 @@ async def show_category_prediction(callback: CallbackQuery):
             await callback.message.answer(text, parse_mode="HTML", reply_markup=keyboard, disable_web_page_preview=True)
         return
 
-    if category == "ИГРОК":
+    if category in ["ИГРОК", "ДУЭЛИ"]:
         bets.sort(key=lambda x: (x['p_name'], -float(x['kf'])))
         ITEMS_PER_PAGE = 4
     else:
@@ -932,10 +1018,13 @@ async def show_category_prediction(callback: CallbackQuery):
 
     for b in page_bets:
         if b['hidden']:
-            if category == "ИГРОК":
+            if category in ["ИГРОК", "ДУЭЛИ"]:
                 if b['p_name'] != current_player:
                     current_player = b['p_name']
-                    text += f"👤 <b>ИГРОК: Скрыто</b>\n"
+                    if category == "ДУЭЛИ":
+                        text += f"⚔️ <b>ДУЭЛЬ: Скрыто</b>\n"
+                    else:
+                        text += f"👤 <b>ИГРОК: Скрыто</b>\n"
 
                 market_map = {
                     "PLAYER_PTS": "Очки",
@@ -976,10 +1065,13 @@ async def show_category_prediction(callback: CallbackQuery):
 
             kfs_str = " | ".join(kfs_strs)
 
-            if category == "ИГРОК":
+            if category in ["ИГРОК", "ДУЭЛИ"]:
                 if b['p_name'] != current_player:
                     current_player = b['p_name']
-                    text += f"👤 <b>ИГРОК: {current_player}</b>\n"
+                    if category == "ДУЭЛИ":
+                        text += f"⚔️ <b>ДУЭЛЬ: {current_player}</b>\n"
+                    else:
+                        text += f"👤 <b>ИГРОК: {current_player}</b>\n"
 
                 market_map = {
                     "PLAYER_PTS": "Очки",
