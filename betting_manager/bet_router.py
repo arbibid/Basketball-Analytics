@@ -44,13 +44,33 @@ class BetRouter:
         # 2. Вызываем нужный API
         result = {'success': False}
         if bookmaker == 'BETCITY':
-            # Здесь нам понадобится смаппить наш ID матча на ID Бетсити (сделаем это чуть позже)
-            # Временно заглушка для логики
-            logger.info("  👉 Отправка запроса в BetcityAPI...")
-            # result = self.betcity.place_bet(event_id="ТУТ_МАППИНГ", bet_type=target, line=line, amount=amount)
+            logger.info("  👉 Отправка запроса в BetcityAPI (Playwright)...")
 
-            # Имитация успешного ответа для тестов:
-            result = {'success': True, 'ticket_id': f'TEST_BC_{signal_id}', 'actual_kf': expected_kf}
+            # Вытягиваем реальный event_id Бетсити для этого маркета из истории
+            conn = self.db.get_connection()
+            c = conn.cursor()
+            c.execute("""
+                        SELECT event_id FROM odds_history 
+                        WHERE bookmaker = 'BETCITY' AND market_type = ? AND ABS(line - ?) < 0.01
+                        ORDER BY timestamp DESC LIMIT 1
+                    """, (market_type, line))
+            row = c.fetchone()
+            conn.close()
+
+            bc_event_id = row[0] if row else None
+
+            if not bc_event_id:
+                logger.error(f"❌ Не удалось найти event_id Бетсити для маркета {market_type} {line}!")
+                return False
+
+            # Жестко фиксируем 100 рублей для нашего главного теста
+            test_amount = 100.0
+            logger.info(f"  🔥 ЗАПУСК PLAYWRIGHT... Цель: event {bc_event_id}, Сумма: {test_amount} RUB")
+
+            # РУБИЛЬНИК ВКЛЮЧЕН: Вызываем настоящий метод простановки ставки!
+            result = self.betcity.place_bet(event_id=bc_event_id, bet_type=target, line=line, amount=test_amount)
+
+            # (Тестовая заглушка удалена)
 
         elif bookmaker == 'FONBET':
             logger.info("  👉 Отправка запроса в FonbetAPI...")

@@ -1,4 +1,4 @@
-# Version: 1.2 (Security Fix: removed hardcoded credentials)
+# Version: 1.3 (Fixed Playwright Timeout & Added Screenshoter)
 import os
 import sys
 import urllib.parse
@@ -29,31 +29,53 @@ class BetcityAPI:
 
     def login(self) -> bool:
         """Авторизация через Playwright и захват токена/кук"""
-        logger.info("🌐 [BetcityAPI] Открываем браузер для авто-логина...")
+        logger.info("🌐 [BetcityAPI] Запуск браузера...")
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True, args=['--headless=new'])
+                # 1. ВЫКЛЮЧАЕМ НЕВИДИМКУ (headless=False), чтобы видеть капчи и ошибки!
+                browser = p.chromium.launch(headless=False)
                 context = browser.new_context(
                     viewport={"width": 1280, "height": 720},
                     user_agent=self.headers["User-Agent"]
                 )
                 page = context.new_page()
-                page.goto("https://betcity.ru/ru/")
+
                 logger.info("⏳ [BetcityAPI] Загружаем главную страницу...")
-                page.wait_for_load_state("networkidle")
+
+                # 2. Изолируем загрузку страницы.
+                # wait_until="commit" означает, что мы ждем только первый ответ сервера, а не полной загрузки всех скриптов.
+                try:
+                    page.goto("https://betcity.ru/ru/", wait_until="commit", timeout=45000)
+                    page.wait_for_timeout(5000)  # Даем 5 секунд на визуальную отрисовку
+                except Exception as e:
+                    logger.warning(f"⚠️ [BetcityAPI] Страница грузится слишком долго, но пробуем прорваться дальше...")
 
                 try:
                     logger.info("🔑 [BetcityAPI] Выполняем вход...")
-                    page.click('text="Вход"')
+
+                    # Кликаем на Вход
+                    login_btn = page.locator('text="Вход"').first
+                    login_btn.click(timeout=10000)
                     page.wait_for_timeout(2000)
+
+                    # Вводим данные
                     page.locator('input[type="text"], input[type="tel"]').first.fill(Config.BETTING_PHONE)
                     page.locator('input[type="password"]').first.fill(Config.BETTING_PASSWORD)
                     page.wait_for_timeout(1000)
-                    page.click('button:has-text("Войти"), button:has-text("Вход")')
-                    page.wait_for_timeout(10000)
+
+                    # Жмем Войти
+                    page.locator('button:has-text("Войти"), button:has-text("Вход")').first.click()
+
+                    logger.info("⏳ [BetcityAPI] Ждем получения токена (5 сек)...")
+                    page.wait_for_timeout(5000)
+
                 except Exception as e:
-                    logger.warning(f"⚠️ [BetcityAPI] Авто-логин споткнулся: {e}. Ждем ручного ввода (30 сек)...")
-                    page.wait_for_timeout(30000)
+                    logger.warning(f"⚠️ [BetcityAPI] Бот не нашел кнопку. Делаю снимок экрана...")
+                    try:
+                        page.screenshot(path="betcity_error.png", timeout=5000)
+                    except Exception as e_snap:
+                        logger.error(f"⚠️ Даже скриншот завис: {e_snap}")
+                    logger.warning(f"⚠️ Скриншот сохранен как 'betcity_error.png'. Ошибка: {e}")
 
                 playwright_cookies = context.cookies()
                 browser.close()
@@ -69,7 +91,9 @@ class BetcityAPI:
                     logger.info("✅ [BetcityAPI] Токен успешно захвачен.")
                     return True
                 else:
-                    logger.error("❌ [BetcityAPI] Токен не найден!")
+                    logger.warning("⚠️ Токена нет! Делаю финальный снимок экрана...")
+                    page.screenshot(path="betcity_no_token.png")
+                    logger.error("❌ [BetcityAPI] Токен не найден! Скриншот сохранен как 'betcity_no_token.png'.")
                     return False
         except Exception as e:
             logger.error(f"❌ [BetcityAPI] Ошибка Playwright: {e}")
@@ -90,13 +114,21 @@ class BetcityAPI:
                                 blocks = ev_blocks.get('blocks', {})
                                 for b_name, b_data in blocks.items():
 
-                                    # Логика поиска (можно расширять под ТМ, ИТМ и т.д.)
-                                    if bet_type == "Ф2" and 'F2' in b_data and 'Kf_F2' in b_data:
-                                        if float(b_data['F2']) == float(target_line):
-                                            return ev_id, b_data['Kf_F2']['ps'], b_data['Kf_F2']['kf'], b_data['F2']
-
-                                    # ТУТ ДОБАВИТЬ ЛОГИКУ ДЛЯ ДРУГИХ ТИПОВ (ТМ, ИТМ и т.д.)
-
+                                    # Универсальная логика для Плееров (Подборы, Очки и тд)
+                                    # Универсальная логика для Плееров (Подборы, Очки и тд)
+                                    if target_line is not None:
+                                        for key, val in b_data.items():
+                                            if isinstance(val, dict) and 'kf' in val and 'ps' in val:
+                                                line_key = key.replace('Kf_', '')
+                                                if line_key in b_data:
+                                                    line_val = b_data[line_key]
+                                                    # ЗАЩИТА: проверяем, что это число, а не системный словарь
+                                                    if isinstance(line_val, (int, float, str)):
+                                                        try:
+                                                            if float(line_val) == float(target_line):
+                                                                return ev_id, val['ps'], val['kf'], line_val
+                                                        except (ValueError, TypeError):
+                                                            pass
         except Exception as e:
             logger.error(f"❌ [BetcityAPI] Ошибка парсинга линии: {e}")
         return None, None, None, None
@@ -152,7 +184,7 @@ class BetcityAPI:
             target_ev_id, pos, kf, actual_line = self._find_target(resp_ext, bet_type, line)
 
             if not pos:
-                logger.error(f"❌ [BetcityAPI] Исход {bet_type} {line} не найден!")
+                logger.error(f"❌ [BetcityAPI] Исход {bet_type} {line} не найден в линии!")
                 return result
 
             logger.info(f"🎯 [BetcityAPI] Цель: POS {pos}, Кэф {kf}. Очищаем корзину...")
@@ -197,12 +229,12 @@ class BetcityAPI:
             # 4. Проверка результата
             if "id_bet" in reply_chk:
                 result.update({'success': True, 'ticket_id': str(reply_chk['id_bet']), 'actual_kf': float(kf)})
-                logger.info(f"🔥 [BetcityAPI] УСПЕХ! Купон: {result['ticket_id']}")
+                logger.info(f"🔥 [BetcityAPI] УСПЕХ! Ставка принята. Купон: {result['ticket_id']}")
                 return result
 
             elif reply_chk.get("status") == 0:
                 interval = reply_chk.get("interval_list", 7)
-                logger.info(f"⏳ [BetcityAPI] Холд сервера {interval} сек...")
+                logger.info(f"⏳ [BetcityAPI] Холд сервера {interval} сек. Ждем...")
                 time.sleep(interval + 1)
 
                 # Ищем купон в истории
@@ -222,11 +254,3 @@ class BetcityAPI:
         except Exception as e:
             logger.error(f"❌ [BetcityAPI] Сетевая ошибка: {e}")
             return result
-
-
-# Пример вызова:
-if __name__ == "__main__":
-    api = BetcityAPI()
-    # Успешно авторизуется и пробьет ставку (укажи актуальный event_id)
-    # response = api.place_bet(event_id="23918572", bet_type="Ф2", line=11.5, amount=10)
-    # print(response)
