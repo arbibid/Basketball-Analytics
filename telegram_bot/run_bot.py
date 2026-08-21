@@ -1,4 +1,4 @@
-# Version: 6.11
+# Version: 6.12
 import asyncio
 import os
 import sys
@@ -574,6 +574,14 @@ async def process_place_bet(callback: CallbackQuery):
     await callback.answer("✅ Сигнал успешно отправлен в Роутер!", show_alert=False)
 
 
+
+def extract_last_name(alias):
+    if not alias:
+        return ""
+    name = alias.replace('ё', 'е').replace('Ё', 'Е')
+    first_word = name.split()[0].lower()
+    return first_word[:5]
+
 def get_real_current_kf(cursor, match_name, market, player_name, line, default_kf, match_id=None):
     kfs = get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_kf, 'FONBET', match_id)
     return kfs.get('FONBET', default_kf)
@@ -595,7 +603,15 @@ def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_k
         if not aliases:
             aliases = [player_name]
 
-        placeholders = ', '.join(['?'] * len(aliases))
+        # Extract roots using the new robust function
+        roots = list(set([extract_last_name(alias) for alias in aliases]))
+
+        # SQLite LIKE is case-insensitive for ASCII, but might fail for Cyrillic LOWER().
+        # So we pass the root with capitalized first letter as well to be safe.
+        conditions = " OR ".join(["player_or_team LIKE ? OR player_or_team LIKE ?" for _ in roots])
+        params_like = []
+        for root in roots:
+            params_like.extend([f"%{root}%", f"%{root.capitalize()}%"])
 
         query = f"""
             SELECT bookmaker, over_kf, under_kf
@@ -604,13 +620,13 @@ def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_k
                        ROW_NUMBER() OVER(PARTITION BY bookmaker ORDER BY timestamp DESC) as rn
                 FROM odds_history
                 WHERE market_type = ? 
-                  AND player_or_team IN ({placeholders}) 
-                  AND line = ?
+                  AND ({conditions})
+                  AND ABS(line - ?) < 0.01
                   AND timestamp >= datetime('now', '-24 hours')
             )
             WHERE rn = 1
         """
-        params = [market] + aliases + [line]
+        params = [market] + params_like + [line]
         cursor.execute(query, params)
 
         for row in cursor.fetchall():
@@ -646,8 +662,12 @@ def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_k
                 bk, o, u, p_or_t = row
                 p_or_t_lower = p_or_t.lower()
 
-                p1_match = any(alias.lower() in p_or_t_lower for alias in p1_aliases)
-                p2_match = any(alias.lower() in p_or_t_lower for alias in p2_aliases)
+                # Use the robust root extraction for matching
+                p1_roots = [extract_last_name(a) for a in p1_aliases]
+                p2_roots = [extract_last_name(a) for a in p2_aliases]
+
+                p1_match = any(root in p_or_t_lower for root in p1_roots)
+                p2_match = any(root in p_or_t_lower for root in p2_roots)
 
                 if p1_match and p2_match:
                     if bk not in found_kfs:
@@ -877,6 +897,43 @@ def _fetch_category_predictions_db(user_id, match_id, category):
 
     processed_bets = []
     import datetime
+
+    # --- H2H PATCH START ---
+    # If the category is 'ДУЭЛИ' and virtual_bets returned nothing, try to fetch raw lines from odds_history
+    if category == 'ДУЭЛИ' and not bets:
+        try:
+            # We fetch H2H odds from the last 24 hours that are relevant to this match date (we don't have event_id for H2H reliably, so we take recent ones)
+            c.execute("""
+                SELECT DISTINCT player_or_team, line, over_kf, under_kf, bookmaker
+                FROM odds_history
+                WHERE market_type = 'PLAYER_H2H'
+                  AND timestamp >= datetime('now', '-24 hours')
+                ORDER BY timestamp DESC
+            """)
+            raw_h2h_odds = c.fetchall()
+
+            # Map raw odds back into a format that looks like 'virtual_bets' records
+            # b = (market, p_name, line, proj, sel, kf, vip_kf, pub_at, bookmaker)
+
+            # Deduplicate by player_or_team and line
+            seen_duels = set()
+            for r in raw_h2h_odds:
+                p_or_t, line, o_kf, u_kf, bk = r
+
+                # Check if this duel likely belongs to the teams playing (basic heuristic, skip if we can't tell, but since it's raw, we might just show everything recent if we don't have a strict filter. For safety, we will just show them since H2H are rare)
+
+                key = f"{p_or_t}_{line}"
+                if key not in seen_duels:
+                    seen_duels.add(key)
+                    # Create pseudo-bets to display
+                    # P1 wins: over
+                    bets.append(('PLAYER_H2H', p_or_t, line, 0.0, 'П1', o_kf, o_kf, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), bk))
+                    # P2 wins: under
+                    bets.append(('PLAYER_H2H', p_or_t, line, 0.0, 'П2', u_kf, u_kf, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), bk))
+        except Exception as e:
+            import logging
+            logging.error(f"Error fetching raw H2H for patch: {e}")
+    # --- H2H PATCH END ---
 
     for b in bets:
         market, p_name, line, proj, sel, kf, vip_kf, pub_at, bookmaker = b
