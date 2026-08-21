@@ -101,7 +101,7 @@ class BetcityAPI:
             logger.error(f"❌ [BetcityAPI] Ошибка Playwright: {e}")
             return False
 
-    def _find_target(self, event_data: dict, bet_type: str, target_line: float, wnba_id: int = None):
+    def _find_target(self, event_data: dict, bet_type: str, target_line: float, wnba_id=None):
         """Парсит JSON линии и ищет нужный исход"""
         try:
             chmps = event_data.get('reply', {}).get('sports', {}).get('3', {}).get('chmps', {})
@@ -117,10 +117,26 @@ class BetcityAPI:
                                 for b_name, b_data in blocks.items():
 
                                     if wnba_id is not None:
-                                        # If wnba_id is provided, check if it matches the current block's name
-                                        parsed_wnba_id = self.mapping_manager.get_wnba_id(b_name, "BETCITY")
-                                        if parsed_wnba_id != wnba_id:
-                                            continue
+                                        # H2H (Дуэли) check
+                                        if isinstance(wnba_id, str) and "_" in wnba_id:
+                                            # "Игрок 1 - Игрок 2" or something similar from Betcity might appear
+                                            # We need to extract both players and match against the wnba_id
+                                            split_char = " - " if " - " in b_name else (" vs " if " vs " in b_name else None)
+                                            if split_char:
+                                                p1, p2 = b_name.split(split_char, 1)
+                                                id1 = self.mapping_manager.get_wnba_id(p1, "BETCITY")
+                                                id2 = self.mapping_manager.get_wnba_id(p2, "BETCITY")
+                                                parsed_wnba_id = f"{id1}_{id2}"
+                                            else:
+                                                parsed_wnba_id = None
+
+                                            if str(parsed_wnba_id) != str(wnba_id):
+                                                continue
+                                        else:
+                                            # If wnba_id is provided, check if it matches the current block's name
+                                            parsed_wnba_id = self.mapping_manager.get_wnba_id(b_name, "BETCITY")
+                                            if str(parsed_wnba_id) != str(wnba_id):
+                                                continue
 
                                     # Универсальная логика для Плееров (Подборы, Очки и тд)
                                     # Универсальная логика для Плееров (Подборы, Очки и тд)
@@ -174,7 +190,7 @@ class BetcityAPI:
             parsed_bets.append((bet_id, b))
         return sorted(parsed_bets, key=lambda x: x[0], reverse=True)
 
-    def place_bet(self, event_id: str, bet_type: str, line: float, amount: float, wnba_id: int = None) -> dict:
+    def place_bet(self, event_id: str, bet_type: str, line: float, amount: float, wnba_id=None) -> dict:
         """Главный метод: оформляет ставку и возвращает результат"""
         result = {'success': False, 'ticket_id': None, 'actual_kf': None}
 

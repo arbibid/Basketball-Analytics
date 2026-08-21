@@ -45,6 +45,7 @@ VALID_PLAYER_POINTS_IDS = (set(config_ids.get("PLAYER_POINTS", [])) | {1432, 143
 VALID_PLAYER_REBOUNDS_IDS = set(config_ids.get("PLAYER_REBOUNDS", [])) | {1466, 1467}
 VALID_PLAYER_THREES_IDS = set(config_ids.get("PLAYER_THREES", [])) | {1515, 1516}
 VALID_PLAYER_ASSISTS_IDS = {1474, 1475} # <--- Перенес передачи сюда
+VALID_PLAYER_H2H_IDS = {3208, 3209} # Из canonical_markets.json
 
 EVENTS_LIST_URL = f"{Config.FONBET_API_URL}/events/list?lang=ru&scopeMarket=1600"
 EVENT_URL_TEMPLATE = f"{Config.FONBET_API_URL}/events/event?lang=ru&eventId={{}}&scopeMarket=1600"
@@ -169,7 +170,15 @@ async def run_daemon():
 
                             elif event_id in player_events:
                                 p_name = player_events[event_id]
-                                wnba_id = mapping_manager.get_wnba_id(p_name, "FONBET")
+
+                                if " - " in p_name:
+                                    # Это дуэль (H2H)
+                                    p1, p2 = p_name.split(" - ", 1)
+                                    id1 = mapping_manager.get_wnba_id(p1, "FONBET")
+                                    id2 = mapping_manager.get_wnba_id(p2, "FONBET")
+                                    wnba_id = f"{id1}_{id2}"
+                                else:
+                                    wnba_id = mapping_manager.get_wnba_id(p_name, "FONBET")
 
                                 for f_id, pt, o, u in pairs:
                                     prop_type = None
@@ -185,6 +194,8 @@ async def run_daemon():
                                     elif f_id in VALID_PLAYER_ASSISTS_IDS:
                                         prop_type = "PLAYER_ASSISTS"
                                         stats["player_ast"] += 1
+                                    elif f_id in VALID_PLAYER_H2H_IDS:
+                                        prop_type = "PLAYER_H2H"
 
                                     if prop_type:
                                         # Not adding to odds_to_insert as we will use db.save_odds which includes wnba_id
