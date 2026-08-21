@@ -1,4 +1,4 @@
-# Version: 6.11
+# Version: 6.12
 import asyncio
 import os
 import sys
@@ -578,6 +578,12 @@ def get_real_current_kf(cursor, match_name, market, player_name, line, default_k
     kfs = get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_kf, 'FONBET', match_id)
     return kfs.get('FONBET', default_kf)
 
+
+def extract_last_name(alias):
+    words = alias.replace('.', ' ').split()
+    if not words: return alias
+    return words[0]  # Usually the first word is the last name in RU formats (e.g., "Кардосо К")
+
 def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_kf, default_bookmaker, match_id=None):
     kfs = {default_bookmaker: default_kf}
 
@@ -595,7 +601,10 @@ def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_k
         if not aliases:
             aliases = [player_name]
 
-        placeholders = ', '.join(['?'] * len(aliases))
+        last_names = [extract_last_name(alias) for alias in aliases]
+
+        # Build dynamic LIKE clauses
+        like_clauses = " OR ".join(["player_or_team LIKE ?"] * len(last_names))
 
         query = f"""
             SELECT bookmaker, over_kf, under_kf
@@ -604,13 +613,13 @@ def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_k
                        ROW_NUMBER() OVER(PARTITION BY bookmaker ORDER BY timestamp DESC) as rn
                 FROM odds_history
                 WHERE market_type = ? 
-                  AND player_or_team IN ({placeholders}) 
-                  AND line = ?
+                  AND ({like_clauses})
+                  AND ABS(line - ?) < 0.01
                   AND timestamp >= datetime('now', '-24 hours')
             )
             WHERE rn = 1
         """
-        params = [market] + aliases + [line]
+        params = [market] + [f"%{name}%" for name in last_names] + [float(line)]
         cursor.execute(query, params)
 
         for row in cursor.fetchall():
@@ -637,17 +646,25 @@ def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_k
             p2_aliases = [ru_name for ru_name, en_name in player_map.items() if en_name == p2_en]
             if not p2_aliases: p2_aliases = [p2_en]
 
-            query = "SELECT bookmaker, over_kf, under_kf, player_or_team FROM odds_history WHERE market_type = 'PLAYER_H2H' AND timestamp >= datetime('now', '-24 hours') ORDER BY timestamp DESC"
+            p1_last_names = [extract_last_name(alias).lower() for alias in p1_aliases]
+            p2_last_names = [extract_last_name(alias).lower() for alias in p2_aliases]
+
+            query = "SELECT bookmaker, over_kf, under_kf, player_or_team, line FROM odds_history WHERE market_type = 'PLAYER_H2H' AND timestamp >= datetime('now', '-24 hours') ORDER BY timestamp DESC"
             cursor.execute(query)
 
             # Dictionary to store the most recent odds per bookmaker
             found_kfs = {}
             for row in cursor.fetchall():
-                bk, o, u, p_or_t = row
+                bk, o, u, p_or_t, row_line = row
+
+                # Compare line safely
+                if abs(float(row_line) - float(line)) >= 0.01:
+                    continue
+
                 p_or_t_lower = p_or_t.lower()
 
-                p1_match = any(alias.lower() in p_or_t_lower for alias in p1_aliases)
-                p2_match = any(alias.lower() in p_or_t_lower for alias in p2_aliases)
+                p1_match = any(lname in p_or_t_lower for lname in p1_last_names)
+                p2_match = any(lname in p_or_t_lower for lname in p2_last_names)
 
                 if p1_match and p2_match:
                     if bk not in found_kfs:
@@ -671,12 +688,12 @@ def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_k
                     SELECT bookmaker, over_kf, under_kf,
                            ROW_NUMBER() OVER(PARTITION BY bookmaker ORDER BY timestamp DESC) as rn
                 FROM odds_history
-                WHERE market_type = ? AND player_or_team = ? AND line = ? 
+                WHERE market_type = ? AND player_or_team = ? AND ABS(line - ?) < 0.01
                   AND (event_id = ? OR parent_event_id = ?)
                 )
                 WHERE rn = 1
             """
-            cursor.execute(query, (market, p_or_t, line, str(match_id), str(match_id)))
+            cursor.execute(query, (market, p_or_t, float(line), str(match_id), str(match_id)))
 
             for row in cursor.fetchall():
                 bk, o, u = row
