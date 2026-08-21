@@ -1,4 +1,4 @@
-# Version: 6.5
+# Version: 6.6
 import sqlite3
 import os
 import datetime
@@ -18,8 +18,6 @@ class DBManager:
         for i in range(max_retries):
             try:
                 conn = sqlite3.connect(self.db_path, timeout=60.0)
-                conn.execute('PRAGMA journal_mode=WAL;')
-                conn.execute('PRAGMA synchronous=NORMAL;')
                 return conn
             except sqlite3.OperationalError as e:
                 if 'database is locked' in str(e) and i < max_retries - 1:
@@ -31,6 +29,9 @@ class DBManager:
     def init_db(self):
         conn = self.get_connection()
         cursor = conn.cursor()
+
+        conn.execute('PRAGMA journal_mode=WAL;')
+        conn.execute('PRAGMA synchronous=NORMAL;')
 
         # Существующие таблицы
         cursor.execute('''CREATE TABLE IF NOT EXISTS matches (
