@@ -1,4 +1,4 @@
-# Version: 1.3 (Fixed Playwright Timeout & Added Screenshoter)
+# Version: 1.4 (Added WNBA ID mapping for player prop betting)
 import os
 import sys
 import urllib.parse
@@ -11,6 +11,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import Config
+from utils.mapping_manager import MappingManager
 
 logger = logging.getLogger("BetcityAPI")
 
@@ -26,6 +27,7 @@ class BetcityAPI:
             "Content-Type": "application/x-www-form-urlencoded"
         }
         self.session.headers.update(self.headers)
+        self.mapping_manager = MappingManager()
 
     def login(self) -> bool:
         """Авторизация через Playwright и захват токена/кук"""
@@ -99,7 +101,7 @@ class BetcityAPI:
             logger.error(f"❌ [BetcityAPI] Ошибка Playwright: {e}")
             return False
 
-    def _find_target(self, event_data: dict, bet_type: str, target_line: float):
+    def _find_target(self, event_data: dict, bet_type: str, target_line: float, wnba_id: int = None):
         """Парсит JSON линии и ищет нужный исход"""
         try:
             chmps = event_data.get('reply', {}).get('sports', {}).get('3', {}).get('chmps', {})
@@ -113,6 +115,12 @@ class BetcityAPI:
                             for inner_ev_id, ev_blocks in inner_data.items():
                                 blocks = ev_blocks.get('blocks', {})
                                 for b_name, b_data in blocks.items():
+
+                                    if wnba_id is not None:
+                                        # If wnba_id is provided, check if it matches the current block's name
+                                        parsed_wnba_id = self.mapping_manager.get_wnba_id(b_name, "BETCITY")
+                                        if parsed_wnba_id != wnba_id:
+                                            continue
 
                                     # Универсальная логика для Плееров (Подборы, Очки и тд)
                                     # Универсальная логика для Плееров (Подборы, Очки и тд)
@@ -166,7 +174,7 @@ class BetcityAPI:
             parsed_bets.append((bet_id, b))
         return sorted(parsed_bets, key=lambda x: x[0], reverse=True)
 
-    def place_bet(self, event_id: str, bet_type: str, line: float, amount: float) -> dict:
+    def place_bet(self, event_id: str, bet_type: str, line: float, amount: float, wnba_id: int = None) -> dict:
         """Главный метод: оформляет ставку и возвращает результат"""
         result = {'success': False, 'ticket_id': None, 'actual_kf': None}
 
@@ -181,7 +189,7 @@ class BetcityAPI:
             ext_url = "https://ad.betcity.ru/d/off/events?rev=6&ext=1&add=dep_events&ver=87&csn=ooca9s"
             resp_ext = self.session.post(ext_url, data=f"ids_ev={event_id}", timeout=10).json()
 
-            target_ev_id, pos, kf, actual_line = self._find_target(resp_ext, bet_type, line)
+            target_ev_id, pos, kf, actual_line = self._find_target(resp_ext, bet_type, line, wnba_id)
 
             if not pos:
                 logger.error(f"❌ [BetcityAPI] Исход {bet_type} {line} не найден в линии!")

@@ -1,4 +1,4 @@
-# Version: 7.14 (Async I/O, DB Batch Inserts, Error Logging)
+# Version: 7.15 (Async I/O, DB Batch Inserts, Error Logging)
 import asyncio
 import aiohttp
 import time
@@ -10,6 +10,7 @@ import logging
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from database.db_manager import DBManager
 from config import Config
+from utils.mapping_manager import MappingManager
 
 # --- БИЗНЕС-ЛОГИКА (ДОМЕННЫЕ ЛИМИТЫ WNBA) ---
 WNBA_MIN_GAME_TOTAL = 120.0
@@ -78,6 +79,8 @@ def extract_fonbet_data(factors_list):
 async def run_daemon():
     db = DBManager()
     db.init_db()
+
+    mapping_manager = MappingManager()
 
     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
     print("🚀 Fonbet Daemon v7.14 запущен. Сбор 100% целевой линии...\n")
@@ -166,6 +169,8 @@ async def run_daemon():
 
                             elif event_id in player_events:
                                 p_name = player_events[event_id]
+                                wnba_id = mapping_manager.get_wnba_id(p_name, "FONBET")
+
                                 for f_id, pt, o, u in pairs:
                                     prop_type = None
                                     if f_id in VALID_PLAYER_POINTS_IDS:
@@ -182,11 +187,16 @@ async def run_daemon():
                                         stats["player_ast"] += 1
 
                                     if prop_type:
-                                        odds_to_insert.append((event_id, f_id, "PLAYER_PROP", p_name, pt, o, u, str(main_event_id)))
+                                        # Not adding to odds_to_insert as we will use db.save_odds which includes wnba_id
+                                        # Or better, we can modify odds_to_insert format, but since instructions say "call db.save_odds":
+                                        db.save_odds(event_id, f_id, prop_type, p_name, pt, o, u, str(main_event_id), wnba_id=wnba_id, bookmaker='FONBET')
                         
                         if odds_to_insert:
+                            # We need to insert the remaining general markets that have no wnba_id
+                            # But wait, odds_history table now has wnba_id column, so we might need to add NULLs or adapt the query.
+                            # The instructions say "Добавь параметр wnba_id (INTEGER) во все SQL-запросы для odds_history".
                             c.executemany(
-                                "INSERT INTO odds_history (event_id, factor_id, market_type, player_or_team, line, over_kf, under_kf, parent_event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                "INSERT INTO odds_history (event_id, factor_id, market_type, player_or_team, line, over_kf, under_kf, parent_event_id, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
                                 odds_to_insert
                             )
                         conn.commit()
