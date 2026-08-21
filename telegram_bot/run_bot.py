@@ -189,7 +189,7 @@ def _fetch_predictions_db():
                 if dt > time_limit:
                     continue
             except ValueError:
-                pass # Если формат даты кривой, оставляем матч в списке от греха подальше
+                pass  # Если формат даты кривой, оставляем матч в списке от греха подальше
 
         filtered_matches.append(m)
 
@@ -488,7 +488,7 @@ async def show_value_lists(callback: CallbackQuery):
                 text += f"   📈 Перевес (Edge): <b>{b['edge']:.1f}%</b>\n\n"
 
                 idx_emoji = num_emojis[i - 1] if i <= 10 else f"[{i}]"
-                
+
                 # Создаем ряд кнопок для всех доступных контор
                 bk_map = {
                     'FONBET': ('FON', '🔴 Фон'),
@@ -496,13 +496,13 @@ async def show_value_lists(callback: CallbackQuery):
                     'PARI': ('PAR', '🔵 Пари'),
                     'MELBET': ('MEL', '🟡 Мелбет')
                 }
-                
+
                 row_buttons = []
                 for bk_name, kf_val in b['all_kfs'].items():
                     abbr, icon = bk_map.get(bk_name, (bk_name[:3].upper(), f"🏢 {bk_name[:3]}"))
                     btn_text = f"{idx_emoji} {icon}: {kf_val}"
                     row_buttons.append(InlineKeyboardButton(text=btn_text, callback_data=f"pb_{b['bet_id']}_{abbr}"))
-                    
+
                 if row_buttons:
                     inline_keyboard.append(row_buttons)
 
@@ -529,7 +529,7 @@ async def process_place_bet(callback: CallbackQuery):
     parts = callback.data.split("_")
     bet_id = int(parts[1])
     bk_abbr = parts[2] if len(parts) > 2 else "FON"
-    
+
     rev_bk_map = {
         'FON': 'FONBET',
         'BET': 'BETCITY',
@@ -550,7 +550,7 @@ async def process_place_bet(callback: CallbackQuery):
         return
 
     match_name, market, category, p_name, line, sel, kf = bet_row
-    
+
     all_kfs = get_all_kfs_for_bet(c, match_name, market, p_name, line, kf, 'FONBET')
     target_kf = all_kfs.get(bk_full_name, kf)
 
@@ -574,15 +574,18 @@ async def process_place_bet(callback: CallbackQuery):
     await callback.answer("✅ Сигнал успешно отправлен в Роутер!", show_alert=False)
 
 
+def extract_last_name(alias):
+    if not alias:
+        return ""
+    name = alias.replace('ё', 'е').replace('Ё', 'Е')
+    first_word = name.split()[0].lower()
+    return first_word[:5]
+
+
 def get_real_current_kf(cursor, match_name, market, player_name, line, default_kf, match_id=None):
     kfs = get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_kf, 'FONBET', match_id)
     return kfs.get('FONBET', default_kf)
 
-
-def extract_last_name(alias):
-    words = alias.replace('.', ' ').split()
-    if not words: return alias
-    return words[0]  # Usually the first word is the last name in RU formats (e.g., "Кардосо К")
 
 def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_kf, default_bookmaker, match_id=None):
     kfs = {default_bookmaker: default_kf}
@@ -601,10 +604,15 @@ def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_k
         if not aliases:
             aliases = [player_name]
 
-        last_names = [extract_last_name(alias) for alias in aliases]
+        # Extract roots using the new robust function
+        roots = list(set([extract_last_name(alias) for alias in aliases]))
 
-        # Build dynamic LIKE clauses
-        like_clauses = " OR ".join(["player_or_team LIKE ?"] * len(last_names))
+        # SQLite LIKE is case-insensitive for ASCII, but might fail for Cyrillic LOWER().
+        # So we pass the root with capitalized first letter as well to be safe.
+        conditions = " OR ".join(["player_or_team LIKE ? OR player_or_team LIKE ?" for _ in roots])
+        params_like = []
+        for root in roots:
+            params_like.extend([f"%{root}%", f"%{root.capitalize()}%"])
 
         query = f"""
             SELECT bookmaker, over_kf, under_kf
@@ -613,13 +621,13 @@ def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_k
                        ROW_NUMBER() OVER(PARTITION BY bookmaker ORDER BY timestamp DESC) as rn
                 FROM odds_history
                 WHERE market_type = ? 
-                  AND ({like_clauses})
+                  AND ({conditions}) 
                   AND ABS(line - ?) < 0.01
                   AND timestamp >= datetime('now', '-24 hours')
             )
             WHERE rn = 1
         """
-        params = [market] + [f"%{name}%" for name in last_names] + [float(line)]
+        params = [market] + params_like + [line]
         cursor.execute(query, params)
 
         for row in cursor.fetchall():
@@ -646,25 +654,21 @@ def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_k
             p2_aliases = [ru_name for ru_name, en_name in player_map.items() if en_name == p2_en]
             if not p2_aliases: p2_aliases = [p2_en]
 
-            p1_last_names = [extract_last_name(alias).lower() for alias in p1_aliases]
-            p2_last_names = [extract_last_name(alias).lower() for alias in p2_aliases]
-
-            query = "SELECT bookmaker, over_kf, under_kf, player_or_team, line FROM odds_history WHERE market_type = 'PLAYER_H2H' AND timestamp >= datetime('now', '-24 hours') ORDER BY timestamp DESC"
+            query = "SELECT bookmaker, over_kf, under_kf, player_or_team FROM odds_history WHERE market_type = 'PLAYER_H2H' AND timestamp >= datetime('now', '-24 hours') ORDER BY timestamp DESC"
             cursor.execute(query)
 
             # Dictionary to store the most recent odds per bookmaker
             found_kfs = {}
             for row in cursor.fetchall():
-                bk, o, u, p_or_t, row_line = row
-
-                # Compare line safely
-                if abs(float(row_line) - float(line)) >= 0.01:
-                    continue
-
+                bk, o, u, p_or_t = row
                 p_or_t_lower = p_or_t.lower()
 
-                p1_match = any(lname in p_or_t_lower for lname in p1_last_names)
-                p2_match = any(lname in p_or_t_lower for lname in p2_last_names)
+                # Use the robust root extraction for matching
+                p1_roots = [extract_last_name(a) for a in p1_aliases]
+                p2_roots = [extract_last_name(a) for a in p2_aliases]
+
+                p1_match = any(root in p_or_t_lower for root in p1_roots)
+                p2_match = any(root in p_or_t_lower for root in p2_roots)
 
                 if p1_match and p2_match:
                     if bk not in found_kfs:
@@ -688,12 +692,12 @@ def get_all_kfs_for_bet(cursor, match_name, market, player_name, line, default_k
                     SELECT bookmaker, over_kf, under_kf,
                            ROW_NUMBER() OVER(PARTITION BY bookmaker ORDER BY timestamp DESC) as rn
                 FROM odds_history
-                WHERE market_type = ? AND player_or_team = ? AND ABS(line - ?) < 0.01
+                WHERE market_type = ? AND player_or_team = ? AND line = ? 
                   AND (event_id = ? OR parent_event_id = ?)
                 )
                 WHERE rn = 1
             """
-            cursor.execute(query, (market, p_or_t, float(line), str(match_id), str(match_id)))
+            cursor.execute(query, (market, p_or_t, line, str(match_id), str(match_id)))
 
             for row in cursor.fetchall():
                 bk, o, u = row
@@ -895,6 +899,45 @@ def _fetch_category_predictions_db(user_id, match_id, category):
     processed_bets = []
     import datetime
 
+    # --- H2H PATCH START ---
+    # If the category is 'ДУЭЛИ' and virtual_bets returned nothing, try to fetch raw lines from odds_history
+    if category == 'ДУЭЛИ' and not bets:
+        try:
+            # We fetch H2H odds from the last 24 hours that are relevant to this match date (we don't have event_id for H2H reliably, so we take recent ones)
+            c.execute("""
+                SELECT DISTINCT player_or_team, line, over_kf, under_kf, bookmaker 
+                FROM odds_history 
+                WHERE market_type = 'PLAYER_H2H' 
+                  AND timestamp >= datetime('now', '-24 hours')
+                ORDER BY timestamp DESC
+            """)
+            raw_h2h_odds = c.fetchall()
+
+            # Map raw odds back into a format that looks like 'virtual_bets' records
+            # b = (market, p_name, line, proj, sel, kf, vip_kf, pub_at, bookmaker)
+
+            # Deduplicate by player_or_team and line
+            seen_duels = set()
+            for r in raw_h2h_odds:
+                p_or_t, line, o_kf, u_kf, bk = r
+
+                # Check if this duel likely belongs to the teams playing (basic heuristic, skip if we can't tell, but since it's raw, we might just show everything recent if we don't have a strict filter. For safety, we will just show them since H2H are rare)
+
+                key = f"{p_or_t}_{line}"
+                if key not in seen_duels:
+                    seen_duels.add(key)
+                    # Create pseudo-bets to display
+                    # P1 wins: over
+                    bets.append(('PLAYER_H2H', p_or_t, line, 0.0, 'П1', o_kf, o_kf,
+                                 datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), bk))
+                    # P2 wins: under
+                    bets.append(('PLAYER_H2H', p_or_t, line, 0.0, 'П2', u_kf, u_kf,
+                                 datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), bk))
+        except Exception as e:
+            import logging
+            logging.error(f"Error fetching raw H2H for patch: {e}")
+    # --- H2H PATCH END ---
+
     for b in bets:
         market, p_name, line, proj, sel, kf, vip_kf, pub_at, bookmaker = b
 
@@ -1075,7 +1118,8 @@ async def show_category_prediction(callback: CallbackQuery):
                     kfs_strs.append(f"{bk_icon}: <b>{kf_val}</b>")
 
             if not kfs_strs:
-                bk_icon = "🔴 Fon" if b.get('bookmaker') == 'FONBET' else "🏙 Bet" if b.get('bookmaker') == 'BETCITY' else b.get('bookmaker', '🔴 Fon')
+                bk_icon = "🔴 Fon" if b.get('bookmaker') == 'FONBET' else "🏙 Bet" if b.get(
+                    'bookmaker') == 'BETCITY' else b.get('bookmaker', '🔴 Fon')
                 kf_display = f"<s>{b['vip_kf']}</s> ➡️ <b>{b['real_kf']}</b>" if b['vip_kf'] and float(
                     b['real_kf']) != float(b['vip_kf']) else f"<b>{b['kf']}</b>"
                 kfs_strs.append(f"{bk_icon}: {kf_display}")
