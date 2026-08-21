@@ -1,4 +1,4 @@
-# Version: 6.4
+# Version: 6.5
 import sqlite3
 from datetime import datetime
 import math
@@ -314,6 +314,7 @@ class WNBAMathCore:
             total_active_usage += hist['usage']
 
         log_lines.append("<pre><code>")
+        log_lines.append("           |ОЧК |ПОД |ПЕР |3-Х |ФОЛ ")
         log_lines.append("Игрок      |PTS |REB |AST |3P  |PF  ")
         log_lines.append("-" * 38)
 
