@@ -1,4 +1,4 @@
-# Version: 1.0 (Умный Маршрутизатор Ордеров)
+# Version: 1.1 (Умный Маршрутизатор Ордеров, wnba_id propagation)
 import os
 import sys
 import logging
@@ -27,7 +27,7 @@ class BetRouter:
         # 1. Получаем данные сигнала из БД
         conn = self.db.get_connection()
         c = conn.cursor()
-        c.execute("SELECT match_name, market_type, target, line, expected_kf FROM bet_signals WHERE id = ?",
+        c.execute("SELECT match_name, market_type, target, line, expected_kf, wnba_id FROM bet_signals WHERE id = ?",
                   (signal_id,))
         signal = c.fetchone()
         conn.close()
@@ -36,7 +36,7 @@ class BetRouter:
             logger.error(f"❌ Сигнал {signal_id} не найден в БД!")
             return False
 
-        match_name, market_type, target, line, expected_kf = signal
+        match_name, market_type, target, line, expected_kf, wnba_id = signal
         amount = float(self.db.get_system_setting('base_bet_amount', 50.0))
 
         logger.info(f"🚀 Инициирую пробитие: {match_name} | {target} {line} в БК: {bookmaker}")
@@ -68,13 +68,19 @@ class BetRouter:
             logger.info(f"  🔥 ЗАПУСК PLAYWRIGHT... Цель: event {bc_event_id}, Сумма: {test_amount} RUB")
 
             # РУБИЛЬНИК ВКЛЮЧЕН: Вызываем настоящий метод простановки ставки!
-            result = self.betcity.place_bet(event_id=bc_event_id, bet_type=target, line=line, amount=test_amount)
+            kwargs = {'event_id': bc_event_id, 'bet_type': target, 'line': line, 'amount': test_amount}
+            if wnba_id and ('PLAYER' in market_type):
+                kwargs['wnba_id'] = wnba_id
+            result = self.betcity.place_bet(**kwargs)
 
             # (Тестовая заглушка удалена)
 
         elif bookmaker == 'FONBET':
             logger.info("  👉 Отправка запроса в FonbetAPI...")
-            # result = self.fonbet.place_bet(...)
+            # kwargs = {'event_id': ..., 'bet_type': target, 'line': line, 'amount': test_amount}
+            # if wnba_id and ('PLAYER' in market_type):
+            #     kwargs['wnba_id'] = wnba_id
+            # result = self.fonbet.place_bet(**kwargs)
 
             # Имитация успешного ответа для тестов:
             result = {'success': True, 'ticket_id': f'TEST_FON_{signal_id}', 'actual_kf': expected_kf}
