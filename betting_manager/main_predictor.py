@@ -1,4 +1,4 @@
-# Version: 7.6 (Single Responsibility: removed bettor API & sleep)
+# Version: 7.7 (Single Responsibility: removed bettor API & sleep, add wnba_id propagation)
 import requests
 import sqlite3
 import datetime
@@ -325,13 +325,13 @@ def run_predictor():
 
             # ИСПРАВЛЕНИЕ: Ищем под-события Фонбета в диапазоне +5000 ID от основного матча
             cursor.execute("""
-                        SELECT event_id, player_or_team, bookmaker
+                        SELECT event_id, player_or_team, bookmaker, wnba_id
                         FROM odds_history
                         WHERE market_type LIKE 'PLAYER_%' AND (event_id = ? OR parent_event_id = ?)
                     """, (match_id, str(match_id)))
             local_player_events = cursor.fetchall()
 
-            for sub_id, p_name_ru, bookmaker in local_player_events:
+            for sub_id, p_name_ru, bookmaker, wnba_id_str in local_player_events:
                 player_events[sub_id] = p_name_ru
 
                 normalized_p_name_ru = re.sub(r'\s+', '', p_name_ru.strip())
@@ -476,13 +476,13 @@ def run_predictor():
                                 print(f"  🔥 ВАЛУЙ: ТОТАЛ БОЛЬШЕ (Линия: {pt} | Кэф: {over_kf}) | Edge: {edge * 100:.1f}%")
                                 coupon_id = None
                                 cursor.execute(
-                                    '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                    '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                     (target_date, match_name, "GAME_TOTAL", "ТОТАЛ", "GAME", pt, expected_total, "БОЛЬШЕ",
-                                     over_kf, over_kf, base_bet_amount, published_at, prelim_flag, coupon_id))
+                                     over_kf, over_kf, base_bet_amount, published_at, prelim_flag, coupon_id, None))
                                 if prelim_flag == 0:
                                     cursor.execute(
-                                        '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge) VALUES (?, ?, ?, ?, ?, ?)''',
-                                        (match_name, "GAME_TOTAL", "GAME | БОЛЬШЕ", pt, over_kf, round(edge * 100, 2))
+                                        '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                                        (match_name, "GAME_TOTAL", "GAME | БОЛЬШЕ", pt, over_kf, round(edge * 100, 2), None)
                                     )
                                 total_bets_placed += 1
                     elif delta_total <= -game_edge_threshold:
@@ -497,13 +497,13 @@ def run_predictor():
                                 print(f"  🔥 ВАЛУЙ: ТОТАЛ МЕНЬШЕ (Линия: {pt} | Кэф: {under_kf}) | Edge: {edge * 100:.1f}%")
                                 coupon_id = None
                                 cursor.execute(
-                                    '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                    '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                     (target_date, match_name, "GAME_TOTAL", "ТОТАЛ", "GAME", pt, expected_total, "МЕНЬШЕ",
-                                     under_kf, under_kf, base_bet_amount, published_at, prelim_flag, coupon_id))
+                                     under_kf, under_kf, base_bet_amount, published_at, prelim_flag, coupon_id, None))
                                 if prelim_flag == 0:
                                     cursor.execute(
-                                        '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge) VALUES (?, ?, ?, ?, ?, ?)''',
-                                        (match_name, "GAME_TOTAL", "GAME | МЕНЬШЕ", pt, under_kf, round(edge * 100, 2))
+                                        '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                                        (match_name, "GAME_TOTAL", "GAME | МЕНЬШЕ", pt, under_kf, round(edge * 100, 2), None)
                                     )
                                 total_bets_placed += 1
                 elif 60 < pt < 115 or m_type == 'TEAM_TOTAL':
@@ -522,13 +522,13 @@ def run_predictor():
                                 print(f"  🔥 ВАЛУЙ: ИТ БОЛЬШЕ {team_target} (Линия: {pt} | Кэф: {over_kf})")
                                 coupon_id = None
                                 cursor.execute(
-                                    '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                    '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                     (target_date, match_name, "TEAM_TOTAL", "ТОТАЛ", team_target, pt, team_proj, "БОЛЬШЕ",
-                                     over_kf, over_kf, base_bet_amount, published_at, prelim_flag, coupon_id))
+                                     over_kf, over_kf, base_bet_amount, published_at, prelim_flag, coupon_id, None))
                                 if prelim_flag == 0:
                                     cursor.execute(
-                                        '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge) VALUES (?, ?, ?, ?, ?, ?)''',
-                                        (match_name, "TEAM_TOTAL", f"{team_target} | БОЛЬШЕ", pt, over_kf, round(edge * 100, 2))
+                                        '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                                        (match_name, "TEAM_TOTAL", f"{team_target} | БОЛЬШЕ", pt, over_kf, round(edge * 100, 2), None)
                                     )
                                 total_bets_placed += 1
                     elif delta_team <= -game_edge_threshold:
@@ -543,13 +543,13 @@ def run_predictor():
                                 print(f"  🔥 ВАЛУЙ: ИТ МЕНЬШЕ {team_target} (Линия: {pt} | Кэф: {under_kf})")
                                 coupon_id = None
                                 cursor.execute(
-                                    '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                    '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                     (target_date, match_name, "TEAM_TOTAL", "ТОТАЛ", team_target, pt, team_proj, "МЕНЬШЕ",
-                                     under_kf, under_kf, base_bet_amount, published_at, prelim_flag, coupon_id))
+                                     under_kf, under_kf, base_bet_amount, published_at, prelim_flag, coupon_id, None))
                                 if prelim_flag == 0:
                                     cursor.execute(
-                                        '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge) VALUES (?, ?, ?, ?, ?, ?)''',
-                                        (match_name, "TEAM_TOTAL", f"{team_target} | МЕНЬШЕ", pt, under_kf, round(edge * 100, 2))
+                                        '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                                        (match_name, "TEAM_TOTAL", f"{team_target} | МЕНЬШЕ", pt, under_kf, round(edge * 100, 2), None)
                                     )
                                 total_bets_placed += 1
                 elif abs(pt) < 35 and pt != 0:
@@ -575,13 +575,13 @@ def run_predictor():
 
                             coupon_id = None
                             cursor.execute(
-                                '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                 (target_date, match_name, "HANDICAP", "ИСХОД", "GAME", pt, expected_margin_t1, "ФОРА 1",
-                                 over_kf, over_kf, base_bet_amount, published_at, prelim_flag, coupon_id))
+                                 over_kf, over_kf, base_bet_amount, published_at, prelim_flag, coupon_id, None))
                             if prelim_flag == 0:
                                 cursor.execute(
-                                    '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge) VALUES (?, ?, ?, ?, ?, ?)''',
-                                    (match_name, "HANDICAP", "GAME | ФОРА 1", pt, over_kf, round(edge * 100, 2))
+                                    '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                                    (match_name, "HANDICAP", "GAME | ФОРА 1", pt, over_kf, round(edge * 100, 2), None)
                                 )
                             total_bets_placed += 1
 
@@ -602,26 +602,26 @@ def run_predictor():
 
                             coupon_id = None
                             cursor.execute(
-                                '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                 (target_date, match_name, "HANDICAP", "ИСХОД", "GAME", pt, expected_margin_t1, "ФОРА 2",
-                                 under_kf, under_kf, base_bet_amount, published_at, prelim_flag, coupon_id))
+                                 under_kf, under_kf, base_bet_amount, published_at, prelim_flag, coupon_id, None))
                             if prelim_flag == 0:
                                 cursor.execute(
-                                    '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge) VALUES (?, ?, ?, ?, ?, ?)''',
-                                    (match_name, "HANDICAP", "GAME | ФОРА 2", pt, under_kf, round(edge * 100, 2))
+                                    '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                                    (match_name, "HANDICAP", "GAME | ФОРА 2", pt, under_kf, round(edge * 100, 2), None)
                                 )
                             total_bets_placed += 1
 
             # === ВТОРОЙ ЦИКЛ: ПОКАЗАТЕЛИ ИГРОКОВ (С РЕНТГЕНОМ) ===
             cursor.execute("""
-                SELECT event_id, factor_id, line, over_kf, under_kf, market_type, player_or_team
+                SELECT event_id, factor_id, line, over_kf, under_kf, market_type, player_or_team, wnba_id
                 FROM odds_history
                 WHERE (event_id = ? OR parent_event_id = ?)
                 AND market_type LIKE 'PLAYER_%' AND market_type != 'PLAYER_H2H'
             """, (match_id, str(match_id)))
             player_odds = cursor.fetchall()
 
-            for sub_id, f_id, pt, over_kf, under_kf, market_name, p_name_ru in player_odds:
+            for sub_id, f_id, pt, over_kf, under_kf, market_name, p_name_ru, wnba_id_str in player_odds:
                 db_name = current_player_map.get(re.sub(r'\s+', '', p_name_ru.strip()))
 
                 # РЕНТГЕН 1: Проверка маппинга
@@ -692,13 +692,13 @@ def run_predictor():
                                 coupon_id = None
                                 published_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                                 cursor.execute(
-                                    '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                    '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                     (target_date, match_name, db_market_name, "ИГРОК", db_name, pt, proj_value, selection,
-                                     target_kf, target_kf, base_bet_amount, published_at, prelim_flag, coupon_id))
+                                     target_kf, target_kf, base_bet_amount, published_at, prelim_flag, coupon_id, wnba_id_str))
                                 if prelim_flag == 0:
                                     cursor.execute(
-                                        '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge) VALUES (?, ?, ?, ?, ?, ?)''',
-                                        (match_name, db_market_name, f"{db_name} | {selection}", pt, target_kf, round(edge * 100, 2))
+                                        '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                                        (match_name, db_market_name, f"{db_name} | {selection}", pt, target_kf, round(edge * 100, 2), wnba_id_str)
                                     )
                                 total_bets_placed += 1
                             else:
@@ -711,13 +711,13 @@ def run_predictor():
 
             # === ТРЕТИЙ ЦИКЛ: ДУЭЛИ ИГРОКОВ (H2H) ===
             cursor.execute("""
-                SELECT factor_id, line, over_kf, under_kf, player_or_team, event_id
+                SELECT factor_id, line, over_kf, under_kf, player_or_team, event_id, wnba_id
                 FROM odds_history
                 WHERE market_type = 'PLAYER_H2H' AND (event_id = ? OR parent_event_id = ?)
             """, (match_id, str(match_id)))
             local_h2h_lines = cursor.fetchall()
 
-            for f_id, pt, over_kf, under_kf, p_name_ru, sub_id in local_h2h_lines:
+            for f_id, pt, over_kf, under_kf, p_name_ru, sub_id, wnba_id_str in local_h2h_lines:
                 if ' - ' not in p_name_ru:
                     continue
 
@@ -789,14 +789,14 @@ def run_predictor():
                                 coupon_id = None
                                 published_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                                 cursor.execute(
-                                    '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                    '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                     (target_date, match_name, "PLAYER_H2H", "ИГРОК", h2h_display_name, pt, proj_value,
                                      selection, target_kf, target_kf, base_bet_amount, published_at, prelim_flag,
-                                     coupon_id))
+                                     coupon_id, wnba_id_str))
                                 if prelim_flag == 0:
                                     cursor.execute(
-                                        '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge) VALUES (?, ?, ?, ?, ?, ?)''',
-                                        (match_name, "PLAYER_H2H", f"{h2h_display_name} | {selection}", pt, target_kf, round(edge * 100, 2))
+                                        '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                                        (match_name, "PLAYER_H2H", f"{h2h_display_name} | {selection}", pt, target_kf, round(edge * 100, 2), wnba_id_str)
                                     )
                                 total_bets_placed += 1
 
