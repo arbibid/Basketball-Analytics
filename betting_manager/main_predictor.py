@@ -1,4 +1,4 @@
-# Version: 7.7 (Single Responsibility: removed bettor API & sleep, add wnba_id propagation)
+# Version: 7.8 (Smart Portfolio H2H Integration)
 import requests
 import sqlite3
 import datetime
@@ -20,6 +20,7 @@ from data_collectors.fonbet_daemon import extract_fonbet_data
 from core.wnba_math import WNBAMathCore
 from database.db_manager import DBManager
 from core.money_management import calculate_kelly_bet
+from core.portfolio_manager import PortfolioManager
 from config import Config
 from data_collectors.injury_scraper import fetch_and_update_injuries
 
@@ -717,6 +718,8 @@ def run_predictor():
             """, (match_id, str(match_id)))
             local_h2h_lines = cursor.fetchall()
 
+            h2h_basket = []
+
             for f_id, pt, over_kf, under_kf, p_name_ru, sub_id, wnba_id_str in local_h2h_lines:
                 if ' - ' not in p_name_ru:
                     continue
@@ -778,27 +781,55 @@ def run_predictor():
                         win_prob = min(implied_prob + (abs(delta) * 0.05), 0.90)
                         edge = win_prob - implied_prob
 
-                        if edge >= 0.10:  # > 10% edge required for H2H
+                        if edge >= 0.12 and target_kf >= 1.78:  # Modified edge and kf threshold for Smart Portfolio H2H
                             h2h_display_name = f"{db_p1} vs {db_p2}"
                             cursor.execute(
                                 "SELECT COUNT(*) FROM virtual_bets WHERE date = ? AND match_name = ? AND player_name = ? AND market = ? AND selection = ? AND is_preliminary = ?",
                                 (target_date, match_name, h2h_display_name, "PLAYER_H2H", selection, prelim_flag))
                             if cursor.fetchone()[0] == 0:
-                                print(
-                                    f"  🔥 ВАЛУЙ ДУЭЛЬ: {h2h_display_name} | {selection} (Линия: {pt} | Кэф: {target_kf}) | Прогноз: {proj_value:.1f} | Edge: {edge * 100:.1f}%")
-                                coupon_id = None
                                 published_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                                cursor.execute(
-                                    '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                                    (target_date, match_name, "PLAYER_H2H", "ИГРОК", h2h_display_name, pt, proj_value,
-                                     selection, target_kf, target_kf, base_bet_amount, published_at, prelim_flag,
-                                     coupon_id, wnba_id_str))
-                                if prelim_flag == 0:
-                                    cursor.execute(
-                                        '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                                        (match_name, "PLAYER_H2H", f"{h2h_display_name} | {selection}", pt, target_kf, round(edge * 100, 2), wnba_id_str)
-                                    )
-                                total_bets_placed += 1
+                                h2h_basket.append({
+                                    'date': target_date,
+                                    'match_name': match_name,
+                                    'market': "PLAYER_H2H",
+                                    'category': "ИГРОК",
+                                    'player_name': h2h_display_name,
+                                    'line': pt,
+                                    'prediction': proj_value,
+                                    'selection': selection,
+                                    'kf': target_kf,
+                                    'is_preliminary': prelim_flag,
+                                    'coupon_id': None,
+                                    'wnba_id': wnba_id_str,
+                                    'edge': edge,
+                                    'implied_prob': implied_prob,
+                                    'win_prob': win_prob,
+                                    'published_at': published_at
+                                })
+
+            if h2h_basket:
+                # Используем base_bet_amount как основу для выделенного пула на 1 матч,
+                # либо берем глобальную константу, если она доступна
+                pool_size = VIRTUAL_BANKROLL * 0.10 if 'VIRTUAL_BANKROLL' in globals() else base_bet_amount * 5.0
+                pm = PortfolioManager(allocated_bankroll=pool_size)
+                optimized_basket = pm.optimize_portfolio(h2h_basket)
+
+                for bet in optimized_basket:
+                    print(f"  🔥 ВАЛУЙ ДУЭЛЬ (Smart Portfolio): {bet['player_name']} | {bet['selection']} (Линия: {bet['line']} | Кэф: {bet['kf']}) | Прогноз: {bet['prediction']:.1f} | Edge: {bet['edge'] * 100:.1f}% | Сумма: {bet['amount']} RUB")
+
+                    cursor.execute(
+                        '''INSERT INTO virtual_bets (date, match_name, market, category, player_name, line, prediction, selection, kf, vip_kf, bet_amount, published_at, is_preliminary, coupon_id, wnba_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                        (bet['date'], bet['match_name'], bet['market'], bet['category'], bet['player_name'], bet['line'], bet['prediction'],
+                         bet['selection'], bet['kf'], bet['kf'], bet['amount'], bet['published_at'], bet['is_preliminary'],
+                         bet['coupon_id'], bet['wnba_id']))
+
+                    if bet['is_preliminary'] == 0:
+                        # Используем db_manager метод или прямой execute с добавленным amount
+                        cursor.execute(
+                            '''INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge, wnba_id, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                            (bet['match_name'], bet['market'], f"{bet['player_name']} | {bet['selection']}", bet['line'], bet['kf'], round(bet['edge'] * 100, 2), bet['wnba_id'], bet['amount'])
+                        )
+                    total_bets_placed += 1
 
         except Exception as e:
             import traceback
