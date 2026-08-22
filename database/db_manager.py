@@ -1,4 +1,4 @@
-# Version: 6.7
+# Version: 6.8
 import sqlite3
 import os
 import datetime
@@ -112,12 +112,18 @@ class DBManager:
                 status TEXT DEFAULT 'READY', -- READY, PROCESSED, REJECTED
                 bookmaker TEXT DEFAULT 'FONBET',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                wnba_id INTEGER
+                wnba_id INTEGER,
+                amount REAL
             )
         ''')
         
         try:
             cursor.execute("ALTER TABLE bet_signals ADD COLUMN bookmaker TEXT DEFAULT 'FONBET'")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE bet_signals ADD COLUMN amount REAL")
         except sqlite3.OperationalError:
             pass
 
@@ -148,14 +154,14 @@ class DBManager:
     # 🔥 НОВЫЕ МЕТОДЫ ДЛЯ РОУТЕРА (Интеграция логики Джулис)
     # ====================================================================
 
-    def add_bet_signal(self, match_name, market_type, target, line, expected_kf, edge, bookmaker='FONBET', wnba_id=None):
+    def add_bet_signal(self, match_name, market_type, target, line, expected_kf, edge, bookmaker='FONBET', wnba_id=None, amount=None):
         conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute('''
-                INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge, bookmaker, wnba_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (match_name, market_type, target, line, expected_kf, edge, bookmaker, wnba_id))
+                INSERT INTO bet_signals (match_name, market_type, target, line, expected_kf, edge, bookmaker, wnba_id, amount)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (match_name, market_type, target, line, expected_kf, edge, bookmaker, wnba_id, amount))
             conn.commit()
             return c.lastrowid
         finally:
